@@ -7,3 +7,4 @@ out/
 !.env.example
 .DS_Store
 .runtime/
+.build/
