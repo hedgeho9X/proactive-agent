@@ -479,9 +479,24 @@ async function bootstrap() {
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
+  // 从系统设置返回后重新读取采集器权限，合并重复聚焦事件。
+  let checkingPermissions = false;
+  const refreshPermissions = async () => {
+    if (shuttingDown || checkingPermissions || window?.isDestroyed()) return;
+    checkingPermissions = true;
+    try {
+      await collector.checkPermissions();
+    } catch {
+      if (!shuttingDown) emit({ kind: "collector.permission_check_failed" });
+    } finally {
+      checkingPermissions = false;
+    }
+  };
+  window.on("focus", () => void refreshPermissions());
   await window.loadFile(
     join(app.getAppPath(), "dist", "renderer", "index.html"),
   );
+  await refreshPermissions();
   console.error("[proactive] bootstrap:window-loaded");
 }
 app.on("window-all-closed", () => app.quit());
