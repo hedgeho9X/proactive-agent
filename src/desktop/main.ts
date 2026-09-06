@@ -603,6 +603,8 @@ async function bootstrap() {
     },
   );
   window = new BrowserWindow({
+    // 自动验收可隐藏测试窗口，默认启动仍正常显示。
+    show: process.env.PROACTIVE_QA_HIDDEN !== "1",
     width: 1400,
     height: 920,
     minWidth: 1000,
