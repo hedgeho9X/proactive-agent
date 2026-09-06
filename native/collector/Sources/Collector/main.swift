@@ -149,6 +149,14 @@ final class Collector: @unchecked Sendable {
         } catch { if !screenshotEmitted { missing(id,"screenshot","unavailable",String(describing:error)) }; missing(id,"ocr","unavailable","capture_or_ocr_failed") } }
     }
 }
+if CommandLine.arguments.contains("--inspect-apps") { emit(["apps":inspectorApps()]); exit(0) }
+if let index = CommandLine.arguments.firstIndex(of:"--inspect"), CommandLine.arguments.count > index + 1, let pid = Int32(CommandLine.arguments[index + 1]) {
+    // 一次性命令也需初始化 AppKit 的窗口服务连接，供 ScreenCaptureKit 使用。
+    _ = NSApplication.shared
+    Task { emit(await inspectAX(pid)); exit(0) }
+    RunLoop.main.run()
+    exit(0)
+}
 let collector = Collector()
 DispatchQueue.global().async { while let line = readLine() { guard let data = line.data(using:.utf8), let command = try? JSONSerialization.jsonObject(with:data) as? [String:Any] else { continue }; DispatchQueue.main.async { switch command["command"] as? String { case "permissions": emit(["type":"permissions","permissions":permissions()]); case "permission.request": requestPermission(command["permission"] as? String ?? ""); case "start": collector.start(command["allowedBundleIds"] as? [String] ?? [], allApps: command["allApps"] as? Bool ?? false); case "stop": collector.stop(); case "shutdown": collector.stop(); exit(0); default: emit(["type":"error","reason":"unknown_command"]) }; if let requestId = command["request_id"] as? String { emit(["type":"ack","request_id":requestId]) } } }; DispatchQueue.main.async { collector.stop(); exit(0) } }
 emit(["type":"status","state":"stopped"])

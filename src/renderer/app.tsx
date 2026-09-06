@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { AXLab } from "./ax-lab.tsx";
 import { createRoot } from "react-dom/client";
 import {
   ArrowDown,
@@ -418,6 +419,7 @@ function App() {
     modelRoles: {},
   });
   const [settings, setSettings] = useState(false);
+  const [page, setPage] = useState("feed");
   const [selected, setSelected] = useState<StreamRow | null>(null);
   const [observation, setObservation] = useState<any>(null);
   const [busy, setBusy] = useState("");
@@ -638,531 +640,561 @@ function App() {
     );
   }
   return (
-    <main className="flex h-full flex-col">
-      <div className="flex h-10 shrink-0 items-center gap-3 px-4">
-        <span className="text-xs font-medium">Proactive</span>
-        <span className="text-xs text-muted-foreground">
-          {state.collector.state === "running" ? "观察中" : "观察已暂停"}
-        </span>
-        <span className="flex-1" />
-        {state.mode === "deterministic_fixture" && (
-          <Badge variant="outline">合成运行</Badge>
-        )}
-        <Button size="xs" variant="ghost" onClick={() => setFollow(!follow)}>
-          <ArrowDown data-icon="inline-start" />
-          {follow ? "跟随" : "恢复跟随"}
-        </Button>
-      </div>
-      <Separator />
-      {error && (
-        <Alert variant="destructive" className="rounded-none py-2">
-          <AlertDescription>
-            <div className="flex w-full items-center gap-2">
-              <span className="truncate">{error}</span>
-              <Button variant="ghost" size="xs" onClick={() => setError("")}>
-                关闭
-              </Button>
-            </div>
-          </AlertDescription>
-        </Alert>
-      )}
-      <div
-        ref={feed}
-        className="min-h-0 flex-1 overflow-y-auto"
-        aria-label="事件流"
-        onScroll={() => {
-          const element = feed.current;
-          if (
-            element &&
-            element.scrollHeight - element.scrollTop - element.clientHeight > 60
-          )
-            setFollow(false);
-        }}
+    <main className="flex h-full">
+      <nav
+        aria-label="功能导航"
+        className="flex w-36 shrink-0 flex-col gap-2 border-r p-3"
       >
-        {rows.length ? (
-          rows.map((row) => renderRow(row))
-        ) : (
-          <Empty className="h-12 flex-none p-2 md:p-2">
-            <EmptyDescription>暂无事件</EmptyDescription>
-          </Empty>
-        )}
+        <span className="mb-3 text-sm font-semibold">Proactive Lab</span>
+        <Button
+          variant={page === "feed" ? "secondary" : "ghost"}
+          onClick={() => setPage("feed")}
+        >
+          观察与 Agent
+        </Button>
+        <Button
+          variant={page === "ax" ? "secondary" : "ghost"}
+          onClick={() => setPage("ax")}
+        >
+          AX 观测台
+        </Button>
+      </nav>
+      <div className={page === "ax" ? "min-w-0 flex-1" : "hidden"}>
+        <AXLab />
       </div>
-      <Separator />
-      <div className="flex shrink-0 items-center gap-3 p-2">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="设置"
-          onClick={() => setSettings(true)}
-        >
-          <Settings2 />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={
-            state.collector.state === "running" ? "停止观察" : "开始观察"
-          }
-          disabled={!!busy}
-          onClick={() =>
-            state.collector.state === "running"
-              ? void act("capture.stop")
-              : setSettings(true)
-          }
-        >
-          {state.collector.state === "running" ? <Pause /> : <Play />}
-        </Button>
-        <form
-          className="flex min-w-0 flex-1 items-center gap-2"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            if (prompt.trim() && (await act("prompt", { text: prompt })))
-              setPrompt("");
+      <div
+        className={page === "feed" ? "flex min-w-0 flex-1 flex-col" : "hidden"}
+      >
+        <div className="flex h-10 shrink-0 items-center gap-3 px-4">
+          <span className="text-xs font-medium">Proactive</span>
+          <span className="text-xs text-muted-foreground">
+            {state.collector.state === "running" ? "观察中" : "观察已暂停"}
+          </span>
+          <span className="flex-1" />
+          {state.mode === "deterministic_fixture" && (
+            <Badge variant="outline">合成运行</Badge>
+          )}
+          <Button size="xs" variant="ghost" onClick={() => setFollow(!follow)}>
+            <ArrowDown data-icon="inline-start" />
+            {follow ? "跟随" : "恢复跟随"}
+          </Button>
+        </div>
+        <Separator />
+        {error && (
+          <Alert variant="destructive" className="rounded-none py-2">
+            <AlertDescription>
+              <div className="flex w-full items-center gap-2">
+                <span className="truncate">{error}</span>
+                <Button variant="ghost" size="xs" onClick={() => setError("")}>
+                  关闭
+                </Button>
+              </div>
+            </AlertDescription>
+          </Alert>
+        )}
+        <div
+          ref={feed}
+          className="min-h-0 flex-1 overflow-y-auto"
+          aria-label="事件流"
+          onScroll={() => {
+            const element = feed.current;
+            if (
+              element &&
+              element.scrollHeight - element.scrollTop - element.clientHeight >
+                60
+            )
+              setFollow(false);
           }}
         >
-          <FieldGroup className="flex-row items-center gap-2">
-            <Field className="min-w-0 flex-1 gap-0">
-              <FieldLabel htmlFor="user-prompt" className="sr-only">
-                用户 Prompt
-              </FieldLabel>
-              <Input
-                id="user-prompt"
-                aria-label="用户 Prompt"
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="发给主 Agent…"
-              />
-            </Field>
-            <Button
-              size="icon-sm"
-              aria-label="发送"
-              disabled={
-                !!busy || !prompt.trim() || state.mode === "unavailable"
-              }
-            >
-              <ArrowUp />
-            </Button>
-          </FieldGroup>
-        </form>
-      </div>
-      <Sheet
-        open={!!selected}
-        onOpenChange={(open) => {
-          if (!open) setSelected(null);
-        }}
-      >
-        <SheetContent className="w-full gap-0 sm:max-w-xl">
-          <SheetHeader>
-            <SheetTitle>{currentRow?.label ?? "事件详情"}</SheetTitle>
-            <SheetDescription>
-              {currentRow?.time} · {statusText(currentRow?.status)}
-            </SheetDescription>
-          </SheetHeader>
-          <Separator />
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">
-            <Tabs value={detailTab} onValueChange={setDetailTab}>
-              <TabsList variant="line" className="w-full">
-                <TabsTrigger value="formatted">详情</TabsTrigger>
-                {selected?.actionId && (
-                  <>
-                    <TabsTrigger value="ax">AX</TabsTrigger>
-                    <TabsTrigger value="image">图像 / OCR</TabsTrigger>
-                    <TabsTrigger value="understanding">理解</TabsTrigger>
-                  </>
-                )}
-                <TabsTrigger value="json">JSON</TabsTrigger>
-              </TabsList>
-              <TabsContent value="formatted" className="pt-4">
-                {currentRow &&
-                  (observation ? (
-                    <div className="flex flex-col gap-4">
-                      <p className="detail-text">{currentRow.text}</p>
-                      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">
-                        <dt>Action</dt>
-                        <dd className="break-all">
-                          {observation.action.action_id}
-                        </dd>
-                        <dt>应用</dt>
-                        <dd>{observation.action.app?.bundle_id}</dd>
-                        <dt>时间</dt>
-                        <dd>{observation.action.occurred_at}</dd>
-                        <dt>Revision</dt>
-                        <dd>{observation.revision}</dd>
-                      </dl>
-                      <Separator />
-                      {observation.evidence.map((link: any) => (
-                        <div key={link.slot} className="flex flex-col gap-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs">{link.slot}</span>
-                            <Badge variant="outline">
-                              {statusText(link.status)}
-                            </Badge>
-                            <span className="text-xs text-muted-foreground">
-                              {link.delta_ms ?? "—"} ms
-                            </span>
+          {rows.length ? (
+            rows.map((row) => renderRow(row))
+          ) : (
+            <Empty className="h-12 flex-none p-2 md:p-2">
+              <EmptyDescription>暂无事件</EmptyDescription>
+            </Empty>
+          )}
+        </div>
+        <Separator />
+        <div className="flex shrink-0 items-center gap-3 p-2">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="设置"
+            onClick={() => setSettings(true)}
+          >
+            <Settings2 />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={
+              state.collector.state === "running" ? "停止观察" : "开始观察"
+            }
+            disabled={!!busy}
+            onClick={() =>
+              state.collector.state === "running"
+                ? void act("capture.stop")
+                : setSettings(true)
+            }
+          >
+            {state.collector.state === "running" ? <Pause /> : <Play />}
+          </Button>
+          <form
+            className="flex min-w-0 flex-1 items-center gap-2"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (prompt.trim() && (await act("prompt", { text: prompt })))
+                setPrompt("");
+            }}
+          >
+            <FieldGroup className="flex-row items-center gap-2">
+              <Field className="min-w-0 flex-1 gap-0">
+                <FieldLabel htmlFor="user-prompt" className="sr-only">
+                  用户 Prompt
+                </FieldLabel>
+                <Input
+                  id="user-prompt"
+                  aria-label="用户 Prompt"
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder="发给主 Agent…"
+                />
+              </Field>
+              <Button
+                size="icon-sm"
+                aria-label="发送"
+                disabled={
+                  !!busy || !prompt.trim() || state.mode === "unavailable"
+                }
+              >
+                <ArrowUp />
+              </Button>
+            </FieldGroup>
+          </form>
+        </div>
+        <Sheet
+          open={!!selected}
+          onOpenChange={(open) => {
+            if (!open) setSelected(null);
+          }}
+        >
+          <SheetContent className="w-full gap-0 sm:max-w-xl">
+            <SheetHeader>
+              <SheetTitle>{currentRow?.label ?? "事件详情"}</SheetTitle>
+              <SheetDescription>
+                {currentRow?.time} · {statusText(currentRow?.status)}
+              </SheetDescription>
+            </SheetHeader>
+            <Separator />
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+              <Tabs value={detailTab} onValueChange={setDetailTab}>
+                <TabsList variant="line" className="w-full">
+                  <TabsTrigger value="formatted">详情</TabsTrigger>
+                  {selected?.actionId && (
+                    <>
+                      <TabsTrigger value="ax">AX</TabsTrigger>
+                      <TabsTrigger value="image">图像 / OCR</TabsTrigger>
+                      <TabsTrigger value="understanding">理解</TabsTrigger>
+                    </>
+                  )}
+                  <TabsTrigger value="json">JSON</TabsTrigger>
+                </TabsList>
+                <TabsContent value="formatted" className="pt-4">
+                  {currentRow &&
+                    (observation ? (
+                      <div className="flex flex-col gap-4">
+                        <p className="detail-text">{currentRow.text}</p>
+                        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">
+                          <dt>Action</dt>
+                          <dd className="break-all">
+                            {observation.action.action_id}
+                          </dd>
+                          <dt>应用</dt>
+                          <dd>{observation.action.app?.bundle_id}</dd>
+                          <dt>时间</dt>
+                          <dd>{observation.action.occurred_at}</dd>
+                          <dt>Revision</dt>
+                          <dd>{observation.revision}</dd>
+                        </dl>
+                        <Separator />
+                        {observation.evidence.map((link: any) => (
+                          <div key={link.slot} className="flex flex-col gap-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs">{link.slot}</span>
+                              <Badge variant="outline">
+                                {statusText(link.status)}
+                              </Badge>
+                              <span className="text-xs text-muted-foreground">
+                                {link.delta_ms ?? "—"} ms
+                              </span>
+                            </div>
+                            {link.reason && (
+                              <p className="text-xs text-muted-foreground">
+                                {link.reason}
+                              </p>
+                            )}
                           </div>
-                          {link.reason && (
+                        ))}
+                        {selectedQueue && (
+                          <RawSection value={selectedQueue} label="队列记录" />
+                        )}
+                      </div>
+                    ) : (
+                      <TraceDetail row={currentRow} />
+                    ))}
+                  {currentRow?.kind === "subagent" &&
+                    currentRow.detail?.taskId && (
+                      <FieldGroup className="mt-4 gap-3">
+                        <Field>
+                          <FieldLabel htmlFor="task-revision">
+                            修正任务
+                          </FieldLabel>
+                          <Input
+                            id="task-revision"
+                            value={revision}
+                            onChange={(e) => setRevision(e.target.value)}
+                          />
+                        </Field>
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            disabled={!!busy || !revision.trim()}
+                            onClick={() =>
+                              void act("revise", {
+                                taskId: currentRow.detail.taskId,
+                                target: revision,
+                              })
+                            }
+                          >
+                            发送修正
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={!!busy}
+                            onClick={() =>
+                              void act("cancel", {
+                                taskId: currentRow.detail.taskId,
+                              })
+                            }
+                          >
+                            取消任务
+                          </Button>
+                        </div>
+                      </FieldGroup>
+                    )}
+                </TabsContent>
+                <TabsContent value="ax" className="pt-4">
+                  <Tabs value={axView} onValueChange={setAXView}>
+                    <TabsList>
+                      <TabsTrigger value="context">Context</TabsTrigger>
+                      <TabsTrigger value="raw">Raw</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                  <p className="my-3 text-xs text-muted-foreground">
+                    {nodes?.length ?? 0} nodes
+                  </p>
+                  {nodes?.length ? (
+                    <AXTree nodes={nodes} />
+                  ) : (
+                    <p className="text-sm text-muted-foreground">AX 不可用</p>
+                  )}
+                  <RawSection
+                    value={{
+                      coverage: ax?.coverage,
+                      policy: ax?.context?.policy_version,
+                      reasons: ax?.context?.reasons,
+                    }}
+                    label="Coverage / 过滤"
+                  />
+                </TabsContent>
+                <TabsContent value="image" className="pt-4">
+                  <div className="flex flex-col gap-4">
+                    {["screenshot", "screenshot_before"].map((slot) => {
+                      const artifact = observation?.artifacts?.[slot];
+                      const link = observation?.evidence?.find(
+                        (item: any) => item.slot === slot,
+                      );
+                      return (
+                        <section key={slot}>
+                          <h3 className="mb-2 text-xs text-muted-foreground">
+                            {slot === "screenshot" ? "After" : "Before"} ·{" "}
+                            {statusText(link?.status)} · {link?.delta_ms ?? "—"}{" "}
+                            ms
+                          </h3>
+                          {artifact?.bytes ? (
+                            <img
+                              className="w-full rounded-md border"
+                              src={"data:image/png;base64," + artifact.bytes}
+                              alt={
+                                slot === "screenshot"
+                                  ? "动作后截图"
+                                  : "动作前缓存截图"
+                              }
+                            />
+                          ) : (
                             <p className="text-xs text-muted-foreground">
-                              {link.reason}
+                              {link?.reason ?? "不可用"}
                             </p>
                           )}
-                        </div>
-                      ))}
-                      {selectedQueue && (
-                        <RawSection value={selectedQueue} label="队列记录" />
-                      )}
-                    </div>
-                  ) : (
-                    <TraceDetail row={currentRow} />
-                  ))}
-                {currentRow?.kind === "subagent" &&
-                  currentRow.detail?.taskId && (
-                    <FieldGroup className="mt-4 gap-3">
-                      <Field>
-                        <FieldLabel htmlFor="task-revision">
-                          修正任务
-                        </FieldLabel>
-                        <Input
-                          id="task-revision"
-                          value={revision}
-                          onChange={(e) => setRevision(e.target.value)}
-                        />
-                      </Field>
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          disabled={!!busy || !revision.trim()}
-                          onClick={() =>
-                            void act("revise", {
-                              taskId: currentRow.detail.taskId,
-                              target: revision,
-                            })
-                          }
-                        >
-                          发送修正
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={!!busy}
-                          onClick={() =>
-                            void act("cancel", {
-                              taskId: currentRow.detail.taskId,
-                            })
-                          }
-                        >
-                          取消任务
-                        </Button>
-                      </div>
-                    </FieldGroup>
-                  )}
-              </TabsContent>
-              <TabsContent value="ax" className="pt-4">
-                <Tabs value={axView} onValueChange={setAXView}>
-                  <TabsList>
-                    <TabsTrigger value="context">Context</TabsTrigger>
-                    <TabsTrigger value="raw">Raw</TabsTrigger>
-                  </TabsList>
-                </Tabs>
-                <p className="my-3 text-xs text-muted-foreground">
-                  {nodes?.length ?? 0} nodes
-                </p>
-                {nodes?.length ? (
-                  <AXTree nodes={nodes} />
-                ) : (
-                  <p className="text-sm text-muted-foreground">AX 不可用</p>
-                )}
-                <RawSection
-                  value={{
-                    coverage: ax?.coverage,
-                    policy: ax?.context?.policy_version,
-                    reasons: ax?.context?.reasons,
-                  }}
-                  label="Coverage / 过滤"
-                />
-              </TabsContent>
-              <TabsContent value="image" className="pt-4">
-                <div className="flex flex-col gap-4">
-                  {["screenshot", "screenshot_before"].map((slot) => {
-                    const artifact = observation?.artifacts?.[slot];
-                    const link = observation?.evidence?.find(
-                      (item: any) => item.slot === slot,
-                    );
-                    return (
-                      <section key={slot}>
-                        <h3 className="mb-2 text-xs text-muted-foreground">
-                          {slot === "screenshot" ? "After" : "Before"} ·{" "}
-                          {statusText(link?.status)} · {link?.delta_ms ?? "—"}{" "}
-                          ms
-                        </h3>
-                        {artifact?.bytes ? (
-                          <img
-                            className="w-full rounded-md border"
-                            src={"data:image/png;base64," + artifact.bytes}
-                            alt={
-                              slot === "screenshot"
-                                ? "动作后截图"
-                                : "动作前缓存截图"
-                            }
-                          />
-                        ) : (
-                          <p className="text-xs text-muted-foreground">
-                            {link?.reason ?? "不可用"}
-                          </p>
-                        )}
-                      </section>
-                    );
-                  })}
-                  <Separator />
-                  <h3 className="text-xs text-muted-foreground">OCR</h3>
-                  <p className="detail-text">
-                    {observation?.artifacts?.ocr?.payload?.content?.blocks
-                      ?.map((block: any) => block.text)
-                      .join("\n") ?? "不可用"}
-                  </p>
-                  <RawSection
-                    value={observation?.artifacts?.ocr?.payload}
-                    label="OCR 位置与置信度"
-                  />
-                </div>
-              </TabsContent>
-              <TabsContent value="understanding" className="pt-4">
-                <div className="flex flex-col gap-4">
-                  <Badge variant="outline">
-                    {statusText(selectedQueue?.status ?? "queued")}
-                  </Badge>
-                  <p className="detail-text">
-                    {concise(
-                      observation?.understanding?.result ??
-                        observation?.understanding,
-                    ) || "待处理"}
-                  </p>
-                  {observation?.understanding?.result?.uncertainty && (
-                    <p className="detail-text text-muted-foreground">
-                      {observation.understanding.result.uncertainty}
+                        </section>
+                      );
+                    })}
+                    <Separator />
+                    <h3 className="text-xs text-muted-foreground">OCR</h3>
+                    <p className="detail-text">
+                      {observation?.artifacts?.ocr?.payload?.content?.blocks
+                        ?.map((block: any) => block.text)
+                        .join("\n") ?? "不可用"}
                     </p>
-                  )}
-                  {selectedQueue?.reason && (
-                    <p className="text-xs text-muted-foreground">
-                      {selectedQueue.reason}
-                    </p>
-                  )}
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      disabled={
-                        !!busy ||
-                        !state.modelRoles?.understanding?.hasKey ||
-                        !observation
-                      }
-                      onClick={() =>
-                        void act("summarize", {
-                          actionId: selected?.actionId,
-                          view: axView,
-                        })
-                      }
-                    >
-                      重新理解
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={!!busy || !selectedQueue}
-                      onClick={() =>
-                        void act("retry", { actionId: selected?.actionId })
-                      }
-                    >
-                      <RotateCcw data-icon="inline-start" />
-                      重试队列
-                    </Button>
+                    <RawSection
+                      value={observation?.artifacts?.ocr?.payload}
+                      label="OCR 位置与置信度"
+                    />
                   </div>
-                  <RawSection
-                    value={observation?.understanding}
-                    label="证据 / 模型 / 用量"
-                  />
-                </div>
-              </TabsContent>
-              <TabsContent value="json" className="pt-4">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="mb-2"
-                  onClick={() =>
-                    void navigator.clipboard
-                      .writeText(
-                        JSON.stringify(
-                          observation ?? currentRow?.detail,
-                          null,
-                          2,
-                        ),
-                      )
-                      .catch((e) => setError(String(e)))
-                  }
-                >
-                  <Copy data-icon="inline-start" />
-                  复制
-                </Button>
-                <JSONView value={observation ?? currentRow?.detail} />
-              </TabsContent>
-            </Tabs>
-          </div>
-        </SheetContent>
-      </Sheet>
-      <Dialog open={settings} onOpenChange={setSettings}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>设置</DialogTitle>
-            <DialogDescription className="sr-only">
-              独立模型角色与允许观察的应用
-            </DialogDescription>
-          </DialogHeader>
-          <Tabs defaultValue="understanding">
-            <TabsList className="w-full">
-              {(Object.keys(roleNames) as Role[]).map((role) => (
-                <TabsTrigger key={role} value={role}>
-                  {roleNames[role]}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-            {(Object.keys(roleNames) as Role[]).map((role) => (
-              <TabsContent key={role} value={role} className="pt-3">
-                <ModelForm
-                  role={role}
-                  config={state.modelRoles?.[role]}
-                  busy={!!busy}
-                  onSave={(role, config) => act("config", { role, config })}
-                />
-              </TabsContent>
-            ))}
-          </Tabs>
-          <Separator />
-          <FieldGroup className="gap-3">
-            <Field className="gap-2">
-              <FieldLabel htmlFor="capture-scope">观察范围</FieldLabel>
-              <Select
-                value={allApps ? "all" : "selected"}
-                onValueChange={(value) => setAllApps(value === "all")}
-                disabled={state.collector.state === "running"}
-              >
-                <SelectTrigger id="capture-scope">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">所有应用（跟随前台窗口）</SelectItem>
-                  <SelectItem value="selected">指定应用</SelectItem>
-                </SelectContent>
-              </Select>
-              {!allApps && (
-                <>
-                  <FieldLabel htmlFor="capture-apps">
-                    应用 Bundle ID（逗号或空格分隔）
-                  </FieldLabel>
-                  <Input
-                    id="capture-apps"
-                    value={bundleIds}
-                    onChange={(e) => setBundleIds(e.target.value)}
-                    placeholder="com.apple.TextEdit"
-                    disabled={state.collector.state === "running"}
-                  />
-                </>
-              )}
-            </Field>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!!busy}
-                onClick={() => void act("permissions")}
-              >
-                检测权限
-              </Button>
-              <span className="flex-1" />
-              <Badge variant="outline">
-                {statusText(state.collector.state)}
-              </Badge>
-              <Button
-                size="sm"
-                disabled={
-                  !!busy ||
-                  (!allApps &&
-                    !bundleIds.trim() &&
-                    state.collector.state !== "running")
-                }
-                onClick={() =>
-                  void act(
-                    state.collector.state === "running"
-                      ? "capture.stop"
-                      : "capture.start",
-                    { bundleIds, allApps },
-                  )
-                }
-              >
-                {state.collector.state === "running" ? "停止" : "开始观察"}
-              </Button>
+                </TabsContent>
+                <TabsContent value="understanding" className="pt-4">
+                  <div className="flex flex-col gap-4">
+                    <Badge variant="outline">
+                      {statusText(selectedQueue?.status ?? "queued")}
+                    </Badge>
+                    <p className="detail-text">
+                      {concise(
+                        observation?.understanding?.result ??
+                          observation?.understanding,
+                      ) || "待处理"}
+                    </p>
+                    {observation?.understanding?.result?.uncertainty && (
+                      <p className="detail-text text-muted-foreground">
+                        {observation.understanding.result.uncertainty}
+                      </p>
+                    )}
+                    {selectedQueue?.reason && (
+                      <p className="text-xs text-muted-foreground">
+                        {selectedQueue.reason}
+                      </p>
+                    )}
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        disabled={
+                          !!busy ||
+                          !state.modelRoles?.understanding?.hasKey ||
+                          !observation
+                        }
+                        onClick={() =>
+                          void act("summarize", {
+                            actionId: selected?.actionId,
+                            view: axView,
+                          })
+                        }
+                      >
+                        重新理解
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!!busy || !selectedQueue}
+                        onClick={() =>
+                          void act("retry", { actionId: selected?.actionId })
+                        }
+                      >
+                        <RotateCcw data-icon="inline-start" />
+                        重试队列
+                      </Button>
+                    </div>
+                    <RawSection
+                      value={observation?.understanding}
+                      label="证据 / 模型 / 用量"
+                    />
+                  </div>
+                </TabsContent>
+                <TabsContent value="json" className="pt-4">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="mb-2"
+                    onClick={() =>
+                      void navigator.clipboard
+                        .writeText(
+                          JSON.stringify(
+                            observation ?? currentRow?.detail,
+                            null,
+                            2,
+                          ),
+                        )
+                        .catch((e) => setError(String(e)))
+                    }
+                  >
+                    <Copy data-icon="inline-start" />
+                    复制
+                  </Button>
+                  <JSONView value={observation ?? currentRow?.detail} />
+                </TabsContent>
+              </Tabs>
             </div>
-            {state.collector.reason && (
-              <p className="text-xs text-muted-foreground">
-                {state.collector.reason}
-              </p>
-            )}
-            {Object.entries({
-              accessibility: "辅助功能",
-              screenRecording: "屏幕录制",
-              inputMonitoring: "输入监控",
-            }).map(([permission, label]) => (
-              <div
-                key={permission}
-                className="flex items-center justify-between gap-2 text-sm"
-              >
-                <span>
-                  {label} ·{" "}
-                  {state.collector.permissions?.[permission] === true
-                    ? "采集进程可用"
-                    : state.collector.permissions?.[permission] === false
-                      ? "未授权"
-                      : "未检测"}
-                </span>
+          </SheetContent>
+        </Sheet>
+        <Dialog open={settings} onOpenChange={setSettings}>
+          <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>设置</DialogTitle>
+              <DialogDescription className="sr-only">
+                独立模型角色与允许观察的应用
+              </DialogDescription>
+            </DialogHeader>
+            <Tabs defaultValue="understanding">
+              <TabsList className="w-full">
+                {(Object.keys(roleNames) as Role[]).map((role) => (
+                  <TabsTrigger key={role} value={role}>
+                    {roleNames[role]}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+              {(Object.keys(roleNames) as Role[]).map((role) => (
+                <TabsContent key={role} value={role} className="pt-3">
+                  <ModelForm
+                    role={role}
+                    config={state.modelRoles?.[role]}
+                    busy={!!busy}
+                    onSave={(role, config) => act("config", { role, config })}
+                  />
+                </TabsContent>
+              ))}
+            </Tabs>
+            <Separator />
+            <FieldGroup className="gap-3">
+              <Field className="gap-2">
+                <FieldLabel htmlFor="capture-scope">观察范围</FieldLabel>
+                <Select
+                  value={allApps ? "all" : "selected"}
+                  onValueChange={(value) => setAllApps(value === "all")}
+                  disabled={state.collector.state === "running"}
+                >
+                  <SelectTrigger id="capture-scope">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">
+                      所有应用（跟随前台窗口）
+                    </SelectItem>
+                    <SelectItem value="selected">指定应用</SelectItem>
+                  </SelectContent>
+                </Select>
+                {!allApps && (
+                  <>
+                    <FieldLabel htmlFor="capture-apps">
+                      应用 Bundle ID（逗号或空格分隔）
+                    </FieldLabel>
+                    <Input
+                      id="capture-apps"
+                      value={bundleIds}
+                      onChange={(e) => setBundleIds(e.target.value)}
+                      placeholder="com.apple.TextEdit"
+                      disabled={state.collector.state === "running"}
+                    />
+                  </>
+                )}
+              </Field>
+              <div className="flex items-center gap-2">
                 <Button
                   variant="outline"
                   size="sm"
                   disabled={!!busy}
-                  onClick={() => void act("permission.request", { permission })}
+                  onClick={() => void act("permissions")}
                 >
-                  去授权
+                  检测权限
+                </Button>
+                <span className="flex-1" />
+                <Badge variant="outline">
+                  {statusText(state.collector.state)}
+                </Badge>
+                <Button
+                  size="sm"
+                  disabled={
+                    !!busy ||
+                    (!allApps &&
+                      !bundleIds.trim() &&
+                      state.collector.state !== "running")
+                  }
+                  onClick={() =>
+                    void act(
+                      state.collector.state === "running"
+                        ? "capture.stop"
+                        : "capture.start",
+                      { bundleIds, allApps },
+                    )
+                  }
+                >
+                  {state.collector.state === "running" ? "停止" : "开始观察"}
                 </Button>
               </div>
-            ))}
-            <p className="text-xs text-muted-foreground">
-              请在系统设置中确认授权应用身份，返回应用后会自动检测，也可点击“检测权限”。若系统要求，请退出并重新打开应用。开发版可能显示为
-              Electron。
-            </p>
-          </FieldGroup>
-          <Separator />
-          <div className="flex gap-2">
-            <Button
-              variant="ghost"
-              size="xs"
-              disabled={!!busy}
-              onClick={() => void act("fixture")}
-            >
-              合成演示
-            </Button>
-            <Button
-              variant="ghost"
-              size="xs"
-              disabled={!!busy}
-              onClick={() => void act("readRoot")}
-            >
-              只读目录
-            </Button>
-          </div>
-          {error && (
-            <Alert variant="destructive">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-        </DialogContent>
-      </Dialog>
+              {state.collector.reason && (
+                <p className="text-xs text-muted-foreground">
+                  {state.collector.reason}
+                </p>
+              )}
+              {Object.entries({
+                accessibility: "辅助功能",
+                screenRecording: "屏幕录制",
+                inputMonitoring: "输入监控",
+              }).map(([permission, label]) => (
+                <div
+                  key={permission}
+                  className="flex items-center justify-between gap-2 text-sm"
+                >
+                  <span>
+                    {label} ·{" "}
+                    {state.collector.permissions?.[permission] === true
+                      ? "采集进程可用"
+                      : state.collector.permissions?.[permission] === false
+                        ? "未授权"
+                        : "未检测"}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!!busy}
+                    onClick={() =>
+                      void act("permission.request", { permission })
+                    }
+                  >
+                    去授权
+                  </Button>
+                </div>
+              ))}
+              <p className="text-xs text-muted-foreground">
+                请在系统设置中确认授权应用身份，返回应用后会自动检测，也可点击“检测权限”。若系统要求，请退出并重新打开应用。开发版可能显示为
+                Electron。
+              </p>
+            </FieldGroup>
+            <Separator />
+            <div className="flex gap-2">
+              <Button
+                variant="ghost"
+                size="xs"
+                disabled={!!busy}
+                onClick={() => void act("fixture")}
+              >
+                合成演示
+              </Button>
+              <Button
+                variant="ghost"
+                size="xs"
+                disabled={!!busy}
+                onClick={() => void act("readRoot")}
+              >
+                只读目录
+              </Button>
+            </div>
+            {error && (
+              <Alert variant="destructive">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+          </DialogContent>
+        </Dialog>
+      </div>
     </main>
   );
 }

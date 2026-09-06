@@ -2,6 +2,8 @@ import { ModelRoles, type ModelRole } from "../model/config.ts";
 import { testModelConnection } from "../model/connection-test.ts";
 import { ActionQueue } from "../model/queue.ts";
 import { DatabaseSync } from "node:sqlite";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import { join, resolve } from "node:path";
 import {
@@ -360,6 +362,23 @@ async function bootstrap() {
       switch (method) {
         case "snapshot":
           return snapshot();
+        case "ax.apps":
+        case "ax.inspect": {
+          const pid = Number(p.pid);
+          if (method === "ax.inspect" && (!Number.isInteger(pid) || pid <= 0))
+            throw new Error("invalid_app_pid");
+          const args =
+            method === "ax.apps"
+              ? ["--inspect-apps"]
+              : ["--inspect", String(pid)];
+          // 只返回到观测台，不保存到动作账本，不触发任何模型请求。
+          const { stdout } = await promisify(execFile)(
+            join(app.getAppPath(), "dist", "native", "ProactiveCollector"),
+            args,
+            { timeout: 15000, maxBuffer: 24 * 1024 * 1024 },
+          );
+          return JSON.parse(stdout);
+        }
         case "observation":
           return observation(String(p.actionId));
         case "permissions":
