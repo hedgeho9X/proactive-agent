@@ -13,6 +13,9 @@ test("Node SQLite evidence, retention, grouping and protected context", () => {
   writeFileSync(
     worker,
     `import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import {writeFileSync,chmodSync} from 'node:fs';
+import {NativeCollectorHost} from ${JSON.stringify(new URL("../src/observation/native-host.ts", import.meta.url).href)};
 import { EvidenceStore } from ${JSON.stringify(storeURL)};
 import { filterAX } from ${JSON.stringify(filterURL)};
 const store = new EvidenceStore(${JSON.stringify(join(dir, "evidence.sqlite"))},{evidenceTTL:1000,metadataTTL:10000,maxBytes:10000,burstMs:500});
@@ -23,18 +26,34 @@ const png = new Uint8Array([137,80,78,71]);
 const image = store.putArtifact('a',{kind:'screenshot',status:'captured',capturedAt:new Date(1000).toISOString(),bytes:png});
 store.putArtifact('a',{kind:'ax',status:'captured',capturedAt:new Date(1000).toISOString(),payload:{nodes:[{node_id:'x',parent_id:null}]}});
 store.putArtifact('a',{kind:'ocr',status:'captured',capturedAt:new Date(1000).toISOString(),payload:{text:'fixture'},screenshotArtifactId:image});
+store.putArtifact('a',{kind:'screenshot',slot:'screenshot_before',status:'captured',capturedAt:new Date(900).toISOString(),bytes:new Uint8Array([1,2,3])});
+assert.equal(store.getObservation('a').evidence.filter(e=>e.kind==='screenshot').length,2);
+assert.equal(store.getObservation('a').evidence.find(e=>e.slot==='screenshot').artifact_id,image);
 assert.deepEqual(Buffer.from(store.getArtifact(image).bytes,'base64'),Buffer.from(png));
 assert.throws(()=>store.putArtifact('b',{kind:'ocr',status:'captured',capturedAt:new Date(1000).toISOString(),payload:{text:'wrong'},screenshotArtifactId:image}));
 store.putArtifact('b',{kind:'screenshot',status:'captured',capturedAt:new Date(1800).toISOString(),bytes:png});
 assert.equal(store.getObservation('b').evidence.find(e=>e.kind==='screenshot').status,'shared');
 store.prune(2200); assert.ok(store.getArtifact(image));
+assert.equal(store.getObservation('a').evidence.find(e=>e.slot==='screenshot').status,'expired');
+assert.equal(store.getObservation('b').evidence.find(e=>e.slot==='screenshot').status,'shared');
 store.pin(image,'fixture'); store.prune(4000); assert.ok(store.getArtifact(image));
 store.unpin(image,'fixture'); store.prune(4000); assert.equal(store.getArtifact(image),null);
 assert.equal(store.getObservation('a').evidence.find(e=>e.kind==='screenshot').status,'expired');
 const filtered=filterAX([{node_id:'child',parent_id:'secure',value:'secret'},{node_id:'target',parent_id:'root',role:'AXButton',clicked:true},{node_id:'root',parent_id:null},{node_id:'secure',parent_id:null,protected:true}]);
 assert.equal(filtered.normalized.find(n=>n.node_id==='child').value,undefined);
 assert.ok(filtered.context.some(n=>n.node_id==='target')); assert.ok(filtered.context.some(n=>n.node_id==='root'));
-store.close(); console.log('PASS');`,
+store.close();
+const legacy = new DatabaseSync(${JSON.stringify(join(dir, "evidence.sqlite"))});
+legacy.exec("ALTER TABLE evidence RENAME TO evidence_v2; CREATE TABLE evidence AS SELECT action_id,kind,status,artifact_id,original_artifact_id,reason,delta_ms FROM evidence_v2 WHERE slot!='screenshot_before'; DROP TABLE evidence_v2; PRAGMA user_version=1;"); legacy.close();
+const reopened=new EvidenceStore(${JSON.stringify(join(dir, "evidence.sqlite"))});
+assert.equal(reopened.getObservation('a').evidence.find(e=>e.slot==='screenshot').status,'expired'); reopened.close();
+const mockPath=${JSON.stringify(join(dir, "mock-collector"))};
+writeFileSync(mockPath, '#!/usr/bin/env node\\n'+${JSON.stringify("import {createInterface} from 'node:readline'; createInterface({input:process.stdin}).on('line',line=>{const request=JSON.parse(line); if(request.command==='shutdown'){setTimeout(()=>process.exit(0),30);return;} setTimeout(()=>{console.log(JSON.stringify(request.command==='permissions'?{type:'permissions',permissions:{accessibility:true}}:{type:'status',state:'running'}));console.log(JSON.stringify({type:'ack',request_id:request.request_id}));},50);});")}); chmodSync(mockPath,0o755);
+const hostStore=new EvidenceStore(':memory:'); const host=new NativeCollectorHost({binaryPath:mockPath,store:hostStore});
+assert.equal(host.status().state,'stopped'); assert.equal((await host.checkPermissions()).permissions.accessibility,true);
+assert.equal((await host.start({allowedBundleIds:['fixture.only']})).state,'running');
+const stopping=host.stop(); assert.equal(host.status().state,'stopping'); await stopping; assert.equal(host.status().state,'stopped'); hostStore.close();
+console.log('PASS');`,
   );
   try {
     const result = spawnSync("node", ["--experimental-strip-types", worker], {

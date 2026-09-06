@@ -44,6 +44,7 @@ export interface AXNode {
   [key: string]: unknown;
 }
 export interface ArtifactInput {
+  slot?: string;
   kind: EvidenceKind;
   status: EvidenceStatus;
   capturedAt: string;
@@ -54,6 +55,7 @@ export interface ArtifactInput {
   metadata?: Record<string, unknown>;
 }
 export interface EvidenceLink {
+  slot: string;
   kind: EvidenceKind;
   status: EvidenceStatus;
   artifact_id: string | null;

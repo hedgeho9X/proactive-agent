@@ -34,6 +34,19 @@ export class EvidenceStore {
       CREATE TABLE IF NOT EXISTS pins(artifact_id TEXT REFERENCES artifacts(id), owner TEXT, PRIMARY KEY(artifact_id,owner));
       CREATE TABLE IF NOT EXISTS outbox(sequence INTEGER PRIMARY KEY AUTOINCREMENT, action_id TEXT, revision INTEGER, kind TEXT);
       CREATE INDEX IF NOT EXISTS actions_time ON actions(occurred);`);
+    // v2 将证据主键从类型扩展为槽位，旧记录默认槽位等于类型。
+    const columns = this.db.prepare("PRAGMA table_info(evidence)").all() as {
+      name: string;
+    }[];
+    if (!columns.some((column) => column.name === "slot"))
+      this.transaction(() =>
+        this.db.exec(`
+      ALTER TABLE evidence RENAME TO evidence_v1;
+      CREATE TABLE evidence(action_id TEXT REFERENCES actions(id) ON DELETE CASCADE,kind TEXT,slot TEXT,status TEXT,artifact_id TEXT REFERENCES artifacts(id),original_artifact_id TEXT,reason TEXT,delta_ms REAL,PRIMARY KEY(action_id,slot));
+      INSERT INTO evidence SELECT action_id,kind,kind,status,artifact_id,original_artifact_id,reason,delta_ms FROM evidence_v1;
+      DROP TABLE evidence_v1; PRAGMA user_version=2;
+    `),
+      );
     // 进程重启后不能把未完成的旧采集继续显示为等待中。
     this.db.exec(
       "UPDATE evidence SET status='unavailable', reason='collector_interrupted' WHERE status='pending'",
@@ -104,12 +117,16 @@ export class EvidenceStore {
           JSON.stringify(action),
           activity,
         );
-      for (const kind of ["ax", "screenshot", "ocr"])
+      for (const slot of ["ax", "screenshot", "ocr", "screenshot_before"])
         this.db
           .prepare(
-            "INSERT INTO evidence(action_id,kind,status) VALUES(?,?,'pending')",
+            "INSERT INTO evidence(action_id,kind,slot,status) VALUES(?,?,?,'pending')",
           )
-          .run(action.action_id, kind);
+          .run(
+            action.action_id,
+            slot === "screenshot_before" ? "screenshot" : slot,
+            slot,
+          );
       this.db
         .prepare(
           "INSERT INTO outbox(action_id,revision,kind) VALUES(?,0,'action')",
@@ -121,6 +138,16 @@ export class EvidenceStore {
   putArtifact(actionId: string, input: ArtifactInput): string | null {
     const observation = this.getObservation(actionId);
     if (!observation) throw new Error("unknown_action");
+    const slot = input.slot ?? input.kind;
+    if (
+      !["ax", "screenshot", "ocr", "screenshot_before"].includes(slot) ||
+      (slot === "screenshot_before"
+        ? input.kind !== "screenshot"
+        : slot !== input.kind)
+    )
+      throw new Error("invalid_evidence_slot");
+    if (!Number.isFinite(Date.parse(input.capturedAt)))
+      throw new Error("invalid_capture_time");
     const available = input.status === "captured" || input.status === "shared";
     if (!available && !input.reason) throw new Error("missing_reason");
     if (available && input.bytes === undefined && input.payload === undefined)
@@ -171,7 +198,7 @@ export class EvidenceStore {
       }
       this.db
         .prepare(
-          "UPDATE evidence SET status=?,artifact_id=?,original_artifact_id=?,reason=?,delta_ms=? WHERE action_id=? AND kind=?",
+          "UPDATE evidence SET status=?,artifact_id=?,original_artifact_id=?,reason=?,delta_ms=? WHERE action_id=? AND slot=?",
         )
         .run(
           status,
@@ -181,7 +208,7 @@ export class EvidenceStore {
           Date.parse(input.capturedAt) -
             Date.parse(observation.action.occurred_at),
           actionId,
-          input.kind,
+          slot,
         );
       this.db
         .prepare("INSERT OR IGNORE INTO evidence_history VALUES(?,?,?)")
@@ -214,7 +241,7 @@ export class EvidenceStore {
           revision: row.revision,
           evidence: this.db
             .prepare(
-              "SELECT kind,status,artifact_id,original_artifact_id,reason,delta_ms FROM evidence WHERE action_id=?",
+              "SELECT kind,slot,status,artifact_id,original_artifact_id,reason,delta_ms FROM evidence WHERE action_id=?",
             )
             .all(id) as unknown as EvidenceLink[],
         }
@@ -276,6 +303,11 @@ export class EvidenceStore {
           .run(id);
         this.db.prepare("DELETE FROM artifacts WHERE id=?").run(id);
       };
+      this.db
+        .prepare(
+          "UPDATE evidence SET status='expired',reason='retention_policy',artifact_id=NULL WHERE artifact_id NOT IN (SELECT artifact_id FROM pins) AND action_id IN (SELECT id FROM actions WHERE occurred+evidence.delta_ms<?)",
+        )
+        .run(now - this.policy.evidenceTTL);
       for (const row of this.db
         .prepare(
           "SELECT id FROM artifacts WHERE id NOT IN (SELECT artifact_id FROM pins) AND id NOT IN (SELECT evidence.artifact_id FROM evidence JOIN actions ON actions.id=evidence.action_id WHERE actions.occurred+evidence.delta_ms>=? AND evidence.artifact_id IS NOT NULL)",
@@ -302,15 +334,22 @@ export class EvidenceStore {
       this.db.exec(
         "DELETE FROM activities WHERE id NOT IN (SELECT activity_id FROM actions)",
       );
-      return { bytes: size };
+      return { bytes: size, overBudget: size > this.policy.maxBytes };
     });
   }
   interruptPending(reason = "collector_stopped") {
     for (const row of this.db
-      .prepare("SELECT action_id,kind FROM evidence WHERE status='pending'")
-      .all() as { action_id: string; kind: ArtifactInput["kind"] }[])
+      .prepare(
+        "SELECT action_id,kind,slot FROM evidence WHERE status='pending'",
+      )
+      .all() as {
+      action_id: string;
+      kind: ArtifactInput["kind"];
+      slot: string;
+    }[])
       this.putArtifact(row.action_id, {
         kind: row.kind,
+        slot: row.slot,
         status: "unavailable",
         reason,
         capturedAt: new Date().toISOString(),

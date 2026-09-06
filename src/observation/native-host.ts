@@ -81,7 +81,11 @@ export class NativeCollectorHost {
                 : undefined,
           };
           const id = this.options.store.putArtifact(event.action_id, input);
-          if (event.kind === "screenshot" && id)
+          if (
+            event.kind === "screenshot" &&
+            event.slot !== "screenshot_before" &&
+            id
+          )
             this.screenshots.set(event.action_id, id);
           if (event.kind === "ocr") this.screenshots.delete(event.action_id);
         }

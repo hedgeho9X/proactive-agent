@@ -9,12 +9,28 @@ let outputLock = NSLock()
 func emit(_ value: [String: Any]) { outputLock.lock(); defer { outputLock.unlock() }; if let data = try? JSONSerialization.data(withJSONObject: value), let line = String(data: data, encoding: .utf8) { print(line); fflush(stdout) } }
 func iso() -> String { ISO8601DateFormatter().string(from: Date()) }
 func permissions() -> [String: Bool] { ["accessibility": AXIsProcessTrusted(), "screenRecording": CGPreflightScreenCaptureAccess(), "inputMonitoring": CGPreflightListenEventAccess()] }
+func bounds(_ element: AXUIElement) -> CGRect? {
+    guard let position = attribute(element,kAXPositionAttribute), let size = attribute(element,kAXSizeAttribute), CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
+    var point = CGPoint.zero; var extent = CGSize.zero
+    guard AXValueGetValue(position as! AXValue,.cgPoint,&point), AXValueGetValue(size as! AXValue,.cgSize,&extent) else { return nil }
+    return CGRect(origin:point,size:extent)
+}
 func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? { var value: CFTypeRef?; return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil }
-final class Collector {
+// 可变控制状态仅主线程访问；跨线程缓存由独立锁保护。后台捕获只读取局部不可变参数。
+final class Collector: @unchecked Sendable {
+    struct CachedFrame { let pid: pid_t; let windowId: CGWindowID; let frame: CGRect; let png: Data; let capturedAt: String; let captured: Date; let sourceActionId: String }
+    let cacheLock = NSLock(); var cache: CachedFrame?
+    func saveCache(_ value: CachedFrame) { cacheLock.lock(); cache = value; cacheLock.unlock() }
+    func before(_ id: String, pid: pid_t, point: CGPoint?, expectedBounds: CGRect) {
+        cacheLock.lock(); let cached = cache; cacheLock.unlock()
+        guard let cached, cached.pid == pid, cached.frame == expectedBounds, Date().timeIntervalSince(cached.captured) <= 2, point.map({cached.frame.contains($0)}) ?? true else { emit(["type":"artifact","action_id":id,"kind":"screenshot","slot":"screenshot_before","status":"unavailable","capturedAt":iso(),"reason":"no_matching_recent_before_frame"]); return }
+        emit(["type":"artifact","action_id":id,"kind":"screenshot","slot":"screenshot_before","status":"shared","capturedAt":cached.capturedAt,"bytes":cached.png.base64EncodedString(),"metadata":["mime_type":"image/png","phase":"before","window_id":cached.windowId,"source_action_id":cached.sourceActionId,"selection":"recent_same_pid_and_ax_window_bounds_cache","overlay_supported":false]])
+    }
+
     var tap: CFMachPort?; var source: CFRunLoopSource?; var sequence: UInt64 = 0
-    let epoch = UUID().uuidString; var session = UUID().uuidString; var allowed = Set<String>(); var busy = false
-    let worker = DispatchQueue(label: "proactive.capture"); var activation: NSObjectProtocol?
-    func stop() { if let tap { CGEvent.tapEnable(tap: tap, enable: false); CFMachPortInvalidate(tap) }; tap = nil; if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }; source = nil; if let activation { NSWorkspace.shared.notificationCenter.removeObserver(activation) }; activation = nil; emit(["type":"status","state":"stopped"]) }
+    let epoch = UUID().uuidString; var session = UUID().uuidString; var allowed = Set<String>(); var busy = false; var suspended = false
+    let worker = DispatchQueue(label: "proactive.capture"); var activation: NSObjectProtocol?; var observer: AXObserver?; var observedRoot: AXUIElement?; var systemObservers = [NSObjectProtocol]()
+    func stop() { cacheLock.lock(); cache = nil; cacheLock.unlock(); if let observer { CFRunLoopRemoveSource(CFRunLoopGetMain(),AXObserverGetRunLoopSource(observer),.commonModes) }; observer = nil; observedRoot = nil; for token in systemObservers { NSWorkspace.shared.notificationCenter.removeObserver(token) }; systemObservers.removeAll(); if let tap { CGEvent.tapEnable(tap: tap, enable: false); CFMachPortInvalidate(tap) }; tap = nil; if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }; source = nil; if let activation { NSWorkspace.shared.notificationCenter.removeObserver(activation) }; activation = nil; emit(["type":"status","state":"stopped"]) }
     func start(_ bundles: [String]) {
         guard tap == nil else { return }; allowed = Set(bundles)
         guard !allowed.isEmpty, permissions().values.allSatisfy({$0}) else { emit(["type":"status","state":"unavailable","reason":"permissions_or_allowlist_missing","permissions":permissions()]); return }
@@ -26,8 +42,28 @@ final class Collector {
         }, userInfo: Unmanaged.passUnretained(self).toOpaque())
         guard let tap else { emit(["type":"status","state":"unavailable","reason":"event_tap_unavailable"]); return }
         source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0); CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes); CGEvent.tapEnable(tap: tap, enable: true)
-        activation = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.record("app_activated", input: [:], point: nil) }
+        activation = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.attachAX(); self?.record("app_activated", input: [:], point: nil) }
+        attachAX()
+        for notification in [NSWorkspace.willSleepNotification,NSWorkspace.didWakeNotification,NSWorkspace.sessionDidResignActiveNotification,NSWorkspace.sessionDidBecomeActiveNotification] {
+            systemObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName:notification,object:nil,queue:.main) { [weak self] note in self?.suspended = note.name == NSWorkspace.willSleepNotification || note.name == NSWorkspace.sessionDidResignActiveNotification; self?.record("system_state",input:["notification":note.name.rawValue],point:nil) })
+        }
         emit(["type":"status","state":"running","permissions":permissions()])
+    }
+    func attachAX() {
+        if let observer { CFRunLoopRemoveSource(CFRunLoopGetMain(),AXObserverGetRunLoopSource(observer),.commonModes) }; observer = nil
+        guard let app = NSWorkspace.shared.frontmostApplication, allowed.contains(app.bundleIdentifier ?? "") else { return }
+        let root = AXUIElementCreateApplication(app.processIdentifier); observedRoot = root
+        let result = AXObserverCreate(app.processIdentifier, { _, _, notification, info in
+            if let info { Unmanaged<Collector>.fromOpaque(info).takeUnretainedValue().record("ax_notification",input:["notification":notification as String],point:nil) }
+        }, &observer)
+        guard result == .success, let observer else { emit(["type":"capability","name":"ax_observer","status":"unavailable","code":result.rawValue]); return }
+        var coverage = [[String:Any]]()
+        for name in [kAXFocusedWindowChangedNotification,kAXFocusedUIElementChangedNotification,kAXWindowCreatedNotification,kAXUIElementDestroyedNotification,kAXTitleChangedNotification,kAXValueChangedNotification,kAXSelectedTextChangedNotification] {
+            let result = AXObserverAddNotification(observer,root,name as CFString,Unmanaged.passUnretained(self).toOpaque())
+            coverage.append(["notification":name,"result":result.rawValue])
+        }
+        CFRunLoopAddSource(CFRunLoopGetMain(),AXObserverGetRunLoopSource(observer),.commonModes)
+        emit(["type":"capability","name":"ax_observer","subscriptions":coverage])
     }
     func receive(_ type: CGEventType, _ event: CGEvent) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput { emit(["type":"status","state":"unavailable","reason":"event_tap_disabled"]); return }
@@ -40,39 +76,51 @@ final class Collector {
     }
     func record(_ kind: String, input: [String:Any], point: CGPoint?) {
         guard let app = NSWorkspace.shared.frontmostApplication else { return }
-        sequence += 1; let id = UUID().uuidString; let time = iso(); let permitted = allowed.contains(app.bundleIdentifier ?? "")
+        sequence += 1; let id = UUID().uuidString; let time = iso(); let permitted = !suspended && allowed.contains(app.bundleIdentifier ?? "")
         emit(["type":"action","action":["schema_version":"1","action_id":id,"capture_session_id":session,"collector_epoch":epoch,"source_sequence":String(sequence),"occurred_at":time,"received_at":time,"monotonic_ns":String(DispatchTime.now().uptimeNanoseconds),"timezone":TimeZone.current.identifier,"kind":kind,"actor":"unknown","origin":"native_observation","trust_class":"untrusted_observation","app":["pid":app.processIdentifier,"bundle_id":app.bundleIdentifier ?? "","name":app.localizedName ?? ""],"input":input,"policy_status":permitted ? "allowed":"excluded","reason_codes":permitted ? []:["app_not_allowlisted"]]])
-        guard permitted else { for kind in ["ax","screenshot","ocr"] { missing(id, kind, "excluded", "app_not_allowlisted") }; return }
-        guard !busy else { for kind in ["ax","screenshot","ocr"] { missing(id, kind, "dropped_by_backpressure", "heavy_capture_busy") }; return }
+        if !permitted { emit(["type":"artifact","action_id":id,"kind":"screenshot","slot":"screenshot_before","status":"excluded","capturedAt":time,"reason":"app_not_allowlisted"]) }
+        guard permitted else { for kind in ["ax","screenshot","ocr","screenshot_before"] { missing(id, kind, "excluded", "app_not_allowlisted") }; return }
+        guard !busy else { for kind in ["ax","screenshot","ocr","screenshot_before"] { missing(id, kind, "dropped_by_backpressure", "heavy_capture_busy") }; return }
         busy = true
         worker.async { self.capture(id, app.processIdentifier, point: point) }
     }
-    func missing(_ id: String, _ kind: String, _ status: String, _ reason: String) { emit(["type":"artifact","action_id":id,"kind":kind,"status":status,"capturedAt":iso(),"reason":reason]) }
+    func missing(_ id: String, _ kind: String, _ status: String, _ reason: String) { emit(["type":"artifact","action_id":id,"kind":kind == "screenshot_before" ? "screenshot" : kind,"slot":kind,"status":status,"capturedAt":iso(),"reason":reason]) }
     func capture(_ id: String, _ pid: pid_t, point: CGPoint?) {
-        let started = iso(); let root = AXUIElementCreateApplication(pid); AXUIElementSetMessagingTimeout(root, 0.05)
+        let started = iso(); let application = AXUIElementCreateApplication(pid); AXUIElementSetMessagingTimeout(application, 0.025)
+        guard let windowValue = attribute(application,kAXFocusedWindowAttribute), CFGetTypeID(windowValue) == AXUIElementGetTypeID() else { for kind in ["ax","screenshot","ocr","screenshot_before"] { missing(id,kind,"unavailable","focused_window_unavailable") }; DispatchQueue.main.async { self.busy = false }; return }
+        let root = windowValue as! AXUIElement; AXUIElementSetMessagingTimeout(root,0.025)
+        guard let windowBounds = bounds(root) else { for kind in ["ax","screenshot","ocr","screenshot_before"] { missing(id,kind,"unavailable","focused_window_bounds_unavailable") }; DispatchQueue.main.async { self.busy = false }; return }
         var target: AXUIElement?; if let point { AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &target) }
-        let focus = attribute(root,kAXFocusedUIElementAttribute) as! AXUIElement?
-        if let focus, attribute(focus,kAXSubroleAttribute) as? String == "AXSecureTextField" { for kind in ["ax","screenshot","ocr"] { missing(id,kind,"excluded","protected_input") }; DispatchQueue.main.async { self.busy = false }; return }
+        let focus = attribute(application,kAXFocusedUIElementAttribute) as! AXUIElement?
+        if let focus, attribute(focus,kAXSubroleAttribute) as? String == "AXSecureTextField" { for kind in ["ax","screenshot","ocr","screenshot_before"] { missing(id,kind,"excluded","protected_input") }; DispatchQueue.main.async { self.busy = false }; return }
+        if let target { var targetPid: pid_t = 0; AXUIElementGetPid(target,&targetPid); if targetPid != pid { for kind in ["ax","screenshot","ocr","screenshot_before"] { missing(id,kind,"unavailable","clicked_background_process_requires_separate_snapshot") }; DispatchQueue.main.async { self.busy = false }; return } }
         var nodes = [[String:Any]](); var truncated = false; let deadline = Date().addingTimeInterval(0.35)
         func visit(_ element: AXUIElement, parent: String?, depth: Int) { guard nodes.count < 250 && depth < 12 && Date() < deadline else { truncated = true; return }; let nodeId = String(nodes.count); let secure = attribute(element,kAXSubroleAttribute) as? String == "AXSecureTextField"; var node: [String:Any] = ["node_id":nodeId,"parent_id":parent as Any? ?? NSNull(),"role":attribute(element,kAXRoleAttribute) as? String ?? "unknown","focused":focus.map { CFEqual($0,element) } ?? false,"clicked":target.map { CFEqual($0,element) } ?? false,"protected":secure]; if !secure { node["title"] = attribute(element,kAXTitleAttribute) as? String; if let value = attribute(element,kAXValueAttribute) as? String { node["value"] = String(value.prefix(4000)) } }; nodes.append(node); for child in attribute(element,kAXChildrenAttribute) as? [AXUIElement] ?? [] { visit(child,parent:nodeId,depth:depth+1); if Date() >= deadline { break } } }
         visit(root,parent:nil,depth:0)
         // 命中目标即使在预算外也单独保存，不用前台应用替代命中进程。
         if let target, !nodes.contains(where: {$0["clicked"] as? Bool == true}) { var targetPid: pid_t = 0; AXUIElementGetPid(target,&targetPid); nodes.append(["node_id":"target","parent_id":NSNull(),"role":attribute(target,kAXRoleAttribute) as? String ?? "unknown","clicked":true,"pid":targetPid]) }
-        if nodes.contains(where: {$0["protected"] as? Bool == true}) { for kind in ["ax","screenshot","ocr"] { missing(id,kind,"excluded","protected_node_in_window") }; DispatchQueue.main.async { self.busy = false }; return }
+        if nodes.contains(where: {$0["protected"] as? Bool == true}) { for kind in ["ax","screenshot","ocr","screenshot_before"] { missing(id,kind,"excluded","protected_node_in_window") }; DispatchQueue.main.async { self.busy = false }; return }
+        before(id,pid:pid,point:point,expectedBounds:windowBounds)
         let stable = NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
         emit(["type":"artifact","action_id":id,"kind":"ax","status":"captured","capturedAt":iso(),"payload":["nodes":nodes,"coverage":["started_at":started,"ended_at":iso(),"visited":nodes.count,"total":NSNull(),"partial":truncated,"target_pid":pid,"stable":stable]]])
         guard stable else { missing(id,"screenshot","unavailable","foreground_changed"); missing(id,"ocr","unavailable","no_source_screenshot"); DispatchQueue.main.async { self.busy = false }; return }
-        Task { defer { DispatchQueue.main.async { self.busy = false } }; do {
+        Task { var screenshotEmitted = false; defer { DispatchQueue.main.async { self.busy = false } }; do {
             let content = try await SCShareableContent.excludingDesktopWindows(true,onScreenWindowsOnly:true)
-            guard let window = content.windows.first(where: {$0.owningApplication?.processID == pid && $0.windowLayer == 0}) else { throw NSError(domain:"no_window",code:1) }
+            let matches = content.windows.filter { $0.owningApplication?.processID == pid && $0.windowLayer == 0 && abs($0.frame.minX-windowBounds.minX)<2 && abs($0.frame.minY-windowBounds.minY)<2 && abs($0.frame.width-windowBounds.width)<2 && abs($0.frame.height-windowBounds.height)<2 }
+            guard matches.count == 1, let window = matches.first else { throw NSError(domain:"focused_window_match_ambiguous_or_missing",code:1) }
+            guard let currentWindowValue = attribute(application,kAXFocusedWindowAttribute), CFGetTypeID(currentWindowValue) == AXUIElementGetTypeID(), CFEqual(currentWindowValue,root) else { throw NSError(domain:"focused_window_changed",code:2) }
             let filter = SCContentFilter(desktopIndependentWindow:window); let config = SCStreamConfiguration(); config.width = Int(window.frame.width * 2); config.height = Int(window.frame.height * 2); config.showsCursor = false
             let image = try await SCScreenshotManager.captureImage(contentFilter:filter,configuration:config)
-            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { throw NSError(domain:"foreground_changed",code:2) }
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid, let finalWindow = attribute(application,kAXFocusedWindowAttribute), CFEqual(finalWindow,root), bounds(root) == windowBounds else { throw NSError(domain:"foreground_or_window_changed",code:2) }
+            if let finalFocus = attribute(application,kAXFocusedUIElementAttribute), CFGetTypeID(finalFocus) == AXUIElementGetTypeID(), attribute(finalFocus as! AXUIElement,kAXSubroleAttribute) as? String == "AXSecureTextField" { throw NSError(domain:"protected_focus_changed",code:4) }
             let rep = NSBitmapImageRep(cgImage:image); guard let png = rep.representation(using:.png,properties:[:]) else { throw NSError(domain:"png",code:3) }
-            emit(["type":"artifact","action_id":id,"kind":"screenshot","status":"captured","capturedAt":iso(),"bytes":png.base64EncodedString(),"metadata":["mime_type":"image/png","window_id":window.windowID,"width":image.width,"height":image.height,"phase":"after","selection":"first_on_screen_window_for_pid","overlay_supported":false]])
+            let screenshotTime = iso()
+            saveCache(CachedFrame(pid:pid,windowId:window.windowID,frame:window.frame,png:png,capturedAt:screenshotTime,captured:Date(),sourceActionId:id))
+            emit(["type":"artifact","action_id":id,"kind":"screenshot","status":"captured","capturedAt":screenshotTime,"bytes":png.base64EncodedString(),"metadata":["mime_type":"image/png","window_id":window.windowID,"width":image.width,"height":image.height,"phase":"after","selection":"unique_ax_focused_window_bounds_match","overlay_supported":false]])
+            screenshotEmitted = true
             let request = VNRecognizeTextRequest(); request.recognitionLevel = .accurate; request.recognitionLanguages = ["en-US","zh-Hans"]; try VNImageRequestHandler(cgImage:image).perform([request]); let blocks = (request.results ?? []).compactMap { result -> [String:Any]? in guard let candidate = result.topCandidates(1).first else { return nil }; return ["text":candidate.string,"confidence":candidate.confidence,"bounds":[result.boundingBox.origin.x,result.boundingBox.origin.y,result.boundingBox.width,result.boundingBox.height]] }
             emit(["type":"artifact","action_id":id,"kind":"ocr","status":"captured","capturedAt":iso(),"payload":["blocks":blocks,"engine":"Apple Vision","coordinate_space":"normalized_bottom_left"]])
-        } catch { missing(id,"screenshot","unavailable",String(describing:error)); missing(id,"ocr","unavailable","capture_or_ocr_failed") } }
+        } catch { if !screenshotEmitted { missing(id,"screenshot","unavailable",String(describing:error)) }; missing(id,"ocr","unavailable","capture_or_ocr_failed") } }
     }
 }
 let collector = Collector()
