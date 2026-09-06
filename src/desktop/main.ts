@@ -211,166 +211,184 @@ app.on("before-quit", (event) => {
     void closeAll().finally(() => app.quit());
   }
 });
-await app.whenReady();
-await mkdir(app.getPath("userData"), { recursive: true });
-store = new EvidenceStore(join(app.getPath("userData"), "observations.sqlite"));
-collector = new NativeCollectorHost({
-  binaryPath: join(app.getAppPath(), "dist", "native", "ProactiveCollector"),
-  store,
-  onEvent: (event: any) => {
-    if (["status", "permissions", "error"].includes(event.type))
-      emit({ kind: "collector." + event.type, ...event });
-    window?.webContents.send("proactive:event");
-    scheduleUnderstanding();
-  },
-});
-const cacheDir = join(app.getPath("userData"), "understanding");
-understanding = new UnderstandingService(cacheDir, emit);
-async function pruneCache() {
-  if (!existsSync(cacheDir)) return;
-  for (const name of await readdir(cacheDir)) {
-    const file = join(cacheDir, name);
-    if ((await stat(file)).mtimeMs < Date.now() - 86_400_000)
-      await unlink(file);
-  }
-}
-await pruneCache();
-// 冷启动只从DSH原生日志读历史，不重建或假装恢复内存中的任务状态。
-const historyRoot = join(app.getPath("userData"), "sessions");
-if (existsSync(historyRoot))
-  for (const file of await readdir(historyRoot, { recursive: true })) {
-    if (!file.endsWith("session.jsonl")) continue;
-    const lines = (await readFile(join(historyRoot, file), "utf8"))
-      .trim()
-      .split("\n");
-    try {
-      const header = JSON.parse(lines[0]);
-      for (const line of lines.slice(-1000)) {
-        const event = JSON.parse(line);
-        if (typeof event.seq === "number")
-          emit({
-            kind: "session.event",
-            sessionId: header.id,
-            event,
-            replayed: true,
-            runtimeMode: file.startsWith("fixture")
-              ? "deterministic_fixture"
-              : "gemini",
-          });
-      }
-    } catch {
-      emit({
-        kind: "runtime.history_error",
-        message: "history_tail_unreadable",
-      });
+// ESM导入完成前Electron不会ready，不能在模块顶层等待whenReady。
+async function bootstrap() {
+  console.error("[proactive] bootstrap:ready");
+  await mkdir(app.getPath("userData"), { recursive: true });
+  store = new EvidenceStore(
+    join(app.getPath("userData"), "observations.sqlite"),
+  );
+  collector = new NativeCollectorHost({
+    binaryPath: join(app.getAppPath(), "dist", "native", "ProactiveCollector"),
+    store,
+    onEvent: (event: any) => {
+      if (["status", "permissions", "error"].includes(event.type))
+        emit({ kind: "collector." + event.type, ...event });
+      window?.webContents.send("proactive:event");
+      scheduleUnderstanding();
+    },
+  });
+  const cacheDir = join(app.getPath("userData"), "understanding");
+  understanding = new UnderstandingService(cacheDir, emit);
+  async function pruneCache() {
+    if (!existsSync(cacheDir)) return;
+    for (const name of await readdir(cacheDir)) {
+      const file = join(cacheDir, name);
+      if ((await stat(file)).mtimeMs < Date.now() - 86_400_000)
+        await unlink(file);
     }
   }
-const cleanup = setInterval(() => {
-  store.prune();
-  void pruneCache();
-}, 60_000);
-cleanup.unref();
-ipcMain.handle(
-  "proactive:invoke",
-  async (_event, method: string, p: any = {}) => {
-    switch (method) {
-      case "snapshot":
-        return snapshot();
-      case "observation":
-        return observation(String(p.actionId));
-      case "permissions":
-        await collector.checkPermissions();
-        return collector.status();
-      case "capture.start": {
-        const allowedBundleIds = String(p.bundleIds ?? "")
-          .split(/[\s,]+/)
-          .filter(Boolean);
-        if (!allowedBundleIds.length) throw new Error("allowlist_required");
-        await collector.start({ allowedBundleIds });
-        return snapshot();
-      }
-      case "capture.stop":
-        await collector.stop();
-        return snapshot();
-      case "config": {
-        if (!p.apiKey || !/^gemini-[a-zA-Z0-9.\-]+$/.test(p.model))
-          throw new Error("invalid_model_config");
-        config = { apiKey: String(p.apiKey), model: p.model, maxCalls: 30 };
-        connection = "configured_unverified";
-        await startRuntime(false);
-        return { mode, model: config.model };
-      }
-      case "fixture":
-        await startRuntime(true);
-        await runtime!.request("observe", {
-          actionId: "fixture-" + Date.now(),
-          value: {
-            scenario: "dispatch",
-            taskId: "demo-" + Date.now(),
-            target: "Monday",
-          },
-        });
-        return { mode };
-      case "prompt":
-        if (!runtime) throw new Error("agent_unavailable");
-        return runtime.request("observe", {
-          actionId: "prompt-" + Date.now(),
-          value:
-            mode === "gemini"
-              ? { user_prompt: String(p.text) }
-              : { scenario: "observation", fact: String(p.text) },
-        });
-      case "revise": {
-        if (!runtime) throw new Error("agent_unavailable");
-        const result = await runtime.request("revise", {
-          taskId: p.taskId,
-          target: p.target,
-        });
-        emit({ kind: "task.revised", ...result });
-        return result;
-      }
-      case "cancel":
-        if (!runtime) throw new Error("agent_unavailable");
-        return runtime.request("cancel", { taskId: p.taskId });
-      case "summarize":
-        return summarize(
-          String(p.actionId),
-          p.view === "raw" ? "raw" : "context",
-        );
-      case "auto":
-        autoUnderstand = !!p.enabled;
-        scheduleUnderstanding();
-        return { autoUnderstand };
-      case "readRoot": {
-        const choice = await dialog.showOpenDialog({
-          properties: ["openDirectory"],
-        });
-        if (!choice.canceled) {
-          allowedReadRoot = choice.filePaths[0];
-          if (runtime) await startRuntime(mode !== "gemini");
+  await pruneCache();
+  // 冷启动只从DSH原生日志读历史，不重建或假装恢复内存中的任务状态。
+  const historyRoot = join(app.getPath("userData"), "sessions");
+  if (existsSync(historyRoot))
+    for (const file of await readdir(historyRoot, { recursive: true })) {
+      if (!file.endsWith("session.jsonl")) continue;
+      const lines = (await readFile(join(historyRoot, file), "utf8"))
+        .trim()
+        .split("\n");
+      try {
+        const header = JSON.parse(lines[0]);
+        for (const line of lines.slice(-1000)) {
+          const event = JSON.parse(line);
+          if (typeof event.seq === "number")
+            emit({
+              kind: "session.event",
+              sessionId: header.id,
+              event,
+              replayed: true,
+              runtimeMode: file.startsWith("fixture")
+                ? "deterministic_fixture"
+                : "gemini",
+            });
         }
-        return { allowedReadRoot };
+      } catch {
+        emit({
+          kind: "runtime.history_error",
+          message: "history_tail_unreadable",
+        });
       }
-      default:
-        throw new Error("method_not_allowed");
     }
-  },
-);
-window = new BrowserWindow({
-  width: 1400,
-  height: 920,
-  minWidth: 1000,
-  minHeight: 650,
-  title: "Proactive Lab",
-  backgroundColor: "#f5f5f2",
-  webPreferences: {
-    preload: join(app.getAppPath(), "dist", "desktop", "preload.cjs"),
-    contextIsolation: true,
-    nodeIntegration: false,
-    sandbox: true,
-  },
-});
-window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-window.webContents.on("will-navigate", (event) => event.preventDefault());
-await window.loadFile(join(app.getAppPath(), "dist", "renderer", "index.html"));
+  const cleanup = setInterval(() => {
+    store.prune();
+    void pruneCache();
+  }, 60_000);
+  cleanup.unref();
+  ipcMain.handle(
+    "proactive:invoke",
+    async (_event, method: string, p: any = {}) => {
+      switch (method) {
+        case "snapshot":
+          return snapshot();
+        case "observation":
+          return observation(String(p.actionId));
+        case "permissions":
+          await collector.checkPermissions();
+          return collector.status();
+        case "capture.start": {
+          const allowedBundleIds = String(p.bundleIds ?? "")
+            .split(/[\s,]+/)
+            .filter(Boolean);
+          if (!allowedBundleIds.length) throw new Error("allowlist_required");
+          await collector.start({ allowedBundleIds });
+          return snapshot();
+        }
+        case "capture.stop":
+          await collector.stop();
+          return snapshot();
+        case "config": {
+          if (!p.apiKey || !/^gemini-[a-zA-Z0-9.\-]+$/.test(p.model))
+            throw new Error("invalid_model_config");
+          config = { apiKey: String(p.apiKey), model: p.model, maxCalls: 30 };
+          connection = "configured_unverified";
+          await startRuntime(false);
+          return { mode, model: config.model };
+        }
+        case "fixture":
+          await startRuntime(true);
+          await runtime!.request("observe", {
+            actionId: "fixture-" + Date.now(),
+            value: {
+              scenario: "dispatch",
+              taskId: "demo-" + Date.now(),
+              target: "Monday",
+            },
+          });
+          return { mode };
+        case "prompt":
+          if (!runtime) throw new Error("agent_unavailable");
+          return runtime.request("observe", {
+            actionId: "prompt-" + Date.now(),
+            value:
+              mode === "gemini"
+                ? { user_prompt: String(p.text) }
+                : { scenario: "observation", fact: String(p.text) },
+          });
+        case "revise": {
+          if (!runtime) throw new Error("agent_unavailable");
+          const result = await runtime.request("revise", {
+            taskId: p.taskId,
+            target: p.target,
+          });
+          emit({ kind: "task.revised", ...result });
+          return result;
+        }
+        case "cancel":
+          if (!runtime) throw new Error("agent_unavailable");
+          return runtime.request("cancel", { taskId: p.taskId });
+        case "summarize":
+          return summarize(
+            String(p.actionId),
+            p.view === "raw" ? "raw" : "context",
+          );
+        case "auto":
+          autoUnderstand = !!p.enabled;
+          scheduleUnderstanding();
+          return { autoUnderstand };
+        case "readRoot": {
+          const choice = await dialog.showOpenDialog({
+            properties: ["openDirectory"],
+          });
+          if (!choice.canceled) {
+            allowedReadRoot = choice.filePaths[0];
+            if (runtime) await startRuntime(mode !== "gemini");
+          }
+          return { allowedReadRoot };
+        }
+        default:
+          throw new Error("method_not_allowed");
+      }
+    },
+  );
+  window = new BrowserWindow({
+    width: 1400,
+    height: 920,
+    minWidth: 1000,
+    minHeight: 650,
+    title: "Proactive Lab",
+    backgroundColor: "#f5f5f2",
+    webPreferences: {
+      preload: join(app.getAppPath(), "dist", "desktop", "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("will-navigate", (event) => event.preventDefault());
+  await window.loadFile(
+    join(app.getAppPath(), "dist", "renderer", "index.html"),
+  );
+  console.error("[proactive] bootstrap:window-loaded");
+}
 app.on("window-all-closed", () => app.quit());
+void app
+  .whenReady()
+  .then(bootstrap)
+  .catch((error) => {
+    console.error(
+      "[proactive] bootstrap:failed",
+      error instanceof Error ? error.stack : String(error),
+    );
+    void closeAll().finally(() => app.exit(1));
+  });

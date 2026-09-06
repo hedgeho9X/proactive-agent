@@ -52,3 +52,9 @@ Key 从界面经父子私有 IPC 传给 runtime，仅存在当前进程内存，
 6. 真实视觉准确率、真实Gemini凭证/费用、系统签名/公证、全部PRD交互场景尚未验证。UI与真实采集的人工验收由主Agent另行记录。
 
 最终自动检查：`bun run typecheck`、`bun run format:check`、`bun run test`、`bun run package:mac` 全部成功。全仓 8 tests / 52 assertions / 22.07 秒。最终包额外以包内 Node 跑了一次带有效 PNG 的 DSH 请求并正常退出。真实模型请求数为 0；人工桌面交互与真实捕获结果由主Agent独立补充，本文不将其记为已通过。
+
+## GUI 启动修复与人工复核
+
+主Agent首次实际GUI启动发现进程存活但无窗口、无CDP端口、无数据目录；采样停在ElectronMain/Node事件循环。原因是Electron的ESM入口在模块求值完成前不进入ready，本入口顶层 `await app.whenReady()` 形成循环。改为同步注册 `app.whenReady().then(bootstrap)`，after-ready初始化全部进入异步bootstrap，增加阶段日志和启动失败归因。参考 [Electron ESM lifecycle](https://www.electronjs.org/docs/latest/tutorial/esm)。
+
+无GUI回归通过：使用真实编译入口和SourceTextModule，保持mock ready永久pending，入口仍须完成求值，避免相同死锁。主Agent随后实际启动确认 bootstrap:ready / window-loaded、9337 file页面和Fixture主子轨迹，截图布局正常。此验证与前面的Node模式验证分别记录。
