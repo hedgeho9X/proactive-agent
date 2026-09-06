@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Proactive Lab 受控采集样例</title>
+<style>
+body { max-width: 880px; margin: 40px auto; font: 16px system-ui; color: #20242c; background: #f5f6f8; }
+section { padding: 24px; margin: 20px 0; background: white; border: 1px solid #dce0e6; border-radius: 12px; }
+button, textarea, input { font: inherit; margin: 8px; padding: 10px; }
+button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 3px solid #4179df; }
+textarea { display: block; width: 90%; min-height: 80px; }
+#history { max-height: 120px; overflow: auto; }
+</style>
+</head>
+<body>
+<h1>受控采集样例</h1>
+<p>只使用本页的合成内容测试。按钮、文本框和滚动用于验证 AX、截图和动作关联。</p>
+<section aria-label="播放控制">
+<h2>Space 的含义由焦点决定</h2>
+<button id="play" aria-pressed="false">播放</button>
+<p id="play-state" aria-live="polite">播放器当前已暂停</p>
+</section>
+<section aria-label="输入与提交">
+<h2>输入、换行与提交</h2>
+<label for="draft">多行草稿：Enter 只换行</label>
+<textarea id="draft" placeholder="输入测试文字，不输入真实秘密"></textarea>
+<button id="submit">提交测试内容</button>
+<p id="submitted" aria-live="polite">尚未提交</p>
+</section>
+<section aria-label="日程纠偏样例">
+<h2>评审安排</h2>
+<p id="schedule" aria-live="polite">评审原定周五</p>
+<button id="monday">改到周一</button>
+<button id="friday">更正：仍然周五</button>
+</section>
+<section aria-label="弹窗与关闭">
+<button id="open-dialog">打开测试弹窗</button>
+<dialog id="dialog"><h2>测试弹窗</h2><p>关闭后此内容消失。</p><button id="close-dialog">关闭</button></dialog>
+</section>
+<section aria-label="可滚动正文"><h2>滚动正文</h2><div id="rows"></div></section>
+<script>
+// 测试页面只改变合成状态，不访问网络、文件或真实日程。
+const play = document.getElementById('play');
+play.addEventListener('click', () => {
+  // 原生 button 在聚焦时可由 Space 激活，便于对照普通输入框。
+  const active = play.getAttribute('aria-pressed') !== 'true';
+  play.setAttribute('aria-pressed', String(active));
+  play.textContent = active ? '暂停' : '播放';
+  document.getElementById('play-state').textContent = active ? '播放器当前正在播放' : '播放器当前已暂停';
+});
+document.getElementById('submit').addEventListener('click', () => {
+  // 清空输入框模拟动作完成后现场变化，测试不能猜成空提交。
+  const draft = document.getElementById('draft');
+  document.getElementById('submitted').textContent = '已提交测试内容：' + draft.value;
+  draft.value = '';
+});
+document.getElementById('monday').addEventListener('click', () => {
+  document.getElementById('schedule').textContent = '评审改到下周一';
+});
+document.getElementById('friday').addEventListener('click', () => {
+  document.getElementById('schedule').textContent = '更正：评审仍然周五';
+});
+document.getElementById('open-dialog').addEventListener('click', () => document.getElementById('dialog').showModal());
+document.getElementById('close-dialog').addEventListener('click', () => document.getElementById('dialog').close());
+// 足够长的普通正文用于检查滚动、视口裁剪和文档顺序。
+for (let index = 1; index <= 120; index += 1) {
+  const row = document.createElement('p');
+  row.textContent = `合成段落 ${index}：这里是可验证的测试正文，没有真实用户内容。`;
+  document.getElementById('rows').append(row);
+}
+</script>
+</body>
+</html>
