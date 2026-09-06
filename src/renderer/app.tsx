@@ -773,12 +773,17 @@ function App() {
           </form>
         </div>
         <Sheet
+          modal={false}
           open={!!selected}
           onOpenChange={(open) => {
             if (!open) setSelected(null);
           }}
         >
-          <SheetContent className="w-full gap-0 sm:max-w-xl">
+          <SheetContent
+            className="w-full gap-0 sm:max-w-xl"
+            // 详情保持展开，背景行可以继续切换；Esc 与关闭按钮仍沿用 Radix 行为。
+            onInteractOutside={(event) => event.preventDefault()}
+          >
             <SheetHeader>
               <SheetTitle>{currentRow?.label ?? "事件详情"}</SheetTitle>
               <SheetDescription>
