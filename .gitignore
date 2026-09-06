@@ -1,0 +1,9 @@
+node_modules/
+dist/
+out/
+.data/
+.env
+.env.*
+!.env.example
+.DS_Store
+.runtime/
