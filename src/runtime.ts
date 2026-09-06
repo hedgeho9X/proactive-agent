@@ -15,7 +15,7 @@ import Llm, {
   ToolCallId,
   MessageId,
 } from "@deepseek-ai/dsh-llm";
-import Sessions, { SessionId } from "@deepseek-ai/dsh-session";
+import Sessions, { SessionId, type Session } from "@deepseek-ai/dsh-session";
 import Agents, { type AgentHandle } from "@deepseek-ai/dsh-agent";
 import Loop from "@deepseek-ai/dsh-agent-loop";
 import Tools, {
@@ -505,8 +505,10 @@ export class ProactiveRuntime {
             (e.type === "agent/inbox/spliced" &&
               e.data.inserted.some((message) => message.id === id)),
         )
-    )
+    ) {
+      await this.flushSession(this.owner.agent.session);
       return { messageId: id, status: "duplicate" };
+    }
     const content = text({ ...value, actionId });
     if (imageBase64)
       content.push({
@@ -525,7 +527,8 @@ export class ProactiveRuntime {
           : { kind: "plugin", plugin: "proactive-bridge" },
       content,
     });
-    await this.flush();
+    // 该回执只证明本次主会话消息持久化，不依赖无关子会话的生命周期。
+    await this.flushSession(this.owner.agent.session);
     return { messageId: id, status: "persisted", sessionId: this.sessionId };
   }
   async revise(taskId: string, target: string) {
@@ -573,12 +576,18 @@ export class ProactiveRuntime {
     await this.ctx.agents.get(SessionId(sessionId))?.whenIdle();
     await this.flush();
   }
+  private async flushSession(session: Session) {
+    const throughSeq = session.snapshotEvents().at(-1)?.seq ?? -1;
+    if (!(await this.ctx.sessions.flush(session)))
+      throw new Error("persistence_unavailable");
+    this.emit({ kind: "session.flushed", sessionId: session.id, throughSeq });
+  }
   async flush() {
     for (const agent of this.ctx.agents.list()) {
-      const throughSeq = agent.session.snapshotEvents().at(-1)?.seq ?? -1;
-      if (!(await this.ctx.sessions.flush(agent.session)))
-        throw new Error("persistence_unavailable");
-      this.emit({ kind: "session.flushed", sessionId: agent.id, throughSeq });
+      // 前一个flush等待时子会话可能已退休；DSH销毁流程拥有其最终持久化。
+      // 此身份检查与flush同步入口之间没有await，不吞磁盘或监听器失败。
+      if (this.ctx.sessions.get(agent.id) !== agent.session) continue;
+      await this.flushSession(agent.session);
     }
   }
   events(cursors: Record<string, number> = {}) {

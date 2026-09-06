@@ -293,3 +293,74 @@ test("子消息拒绝时回滚revision和target", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("快速child退休不影响多action主回执，全量flush跳过退休快照", async () => {
+  const { ProactiveRuntime } = await import("../src/runtime.ts");
+  const root = await mkdtemp(join(tmpdir(), "retire-flush-"));
+  const events: any[] = [];
+  const runtime = new ProactiveRuntime(root, (e) => events.push(e), 15);
+  try {
+    await runtime.start();
+    await runtime.observe("spawn", {
+      scenario: "dispatch",
+      taskId: "fast-child",
+      target: "test",
+    });
+    await until(() => events.some((e) => e.kind === "tool.delay.started"));
+    const sessionFlush = runtime.ctx.sessions.flush.bind(runtime.ctx.sessions);
+    let delayed = false;
+    runtime.ctx.sessions.flush = async (session) => {
+      if (session.id === "proactive-main" && !delayed) {
+        delayed = true;
+        await until(() => events.some((e) => e.kind === "agent.disposed"));
+      }
+      return sessionFlush(session);
+    };
+    await runtime.flush();
+    for (let i = 0; i < 15; i++)
+      expect(
+        await runtime.observe("next-" + i, { scenario: "observation" }),
+      ).toMatchObject({ status: "persisted" });
+    await runtime.idle();
+    expect(events.some((e) => e.kind === "agent.disposed")).toBe(true);
+  } finally {
+    await runtime.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("已入队后持久化失败重试会重新flush且不重复消息", async () => {
+  const { ProactiveRuntime } = await import("../src/runtime.ts");
+  const root = await mkdtemp(join(tmpdir(), "retry-flush-"));
+  const runtime = new ProactiveRuntime(root, () => {}, 1);
+  try {
+    await runtime.start();
+    const real = runtime.ctx.sessions.flush.bind(runtime.ctx.sessions);
+    let calls = 0;
+    runtime.ctx.sessions.flush = async (session) => {
+      calls++;
+      if (calls === 1) throw new Error("fixture_disk_failure");
+      return real(session);
+    };
+    await expect(
+      runtime.observe("retry-one", { scenario: "observation" }),
+    ).rejects.toThrow("fixture_disk_failure");
+    expect(
+      await runtime.observe("retry-one", { scenario: "observation" }),
+    ).toMatchObject({ status: "duplicate" });
+    expect(calls).toBe(2);
+    await runtime.idle();
+    expect(
+      runtime
+        .events()
+        .filter(
+          (row) =>
+            row.event.type === "user/message" &&
+            row.event.data.id === "action:retry-one",
+        ),
+    ).toHaveLength(1);
+  } finally {
+    await runtime.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
