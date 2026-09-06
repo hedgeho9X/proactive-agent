@@ -463,7 +463,10 @@ export class ProactiveRuntime {
     this.owner.agent.followup({
       id,
       role: "user",
-      source: { kind: "plugin", plugin: "proactive-bridge" },
+      source:
+        value.user_prompt !== undefined || value.origin === "user_prompt"
+          ? { kind: "user" }
+          : { kind: "plugin", plugin: "proactive-bridge" },
       content,
     });
     await this.flush();

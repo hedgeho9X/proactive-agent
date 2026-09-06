@@ -143,7 +143,7 @@ test("Gemini mock SDK工具多轮保留原始Part和thoughtSignature，不增加
 test("live/final与重复回补只有一个assistant行", () => {
   const chunk = {
     kind: "session.event",
-    sessionId: "main",
+    sessionId: "proactive-main",
     event: {
       type: "assistant/chunk",
       time: 1,
@@ -152,7 +152,7 @@ test("live/final与重复回补只有一个assistant行", () => {
   };
   const final = {
     kind: "session.event",
-    sessionId: "main",
+    sessionId: "proactive-main",
     event: {
       type: "assistant/message",
       time: 2,
@@ -186,4 +186,78 @@ test("只读目录拒绝符号链接越界", async () => {
     await rm(root, { recursive: true, force: true });
     await rm(outside, { recursive: true, force: true });
   }
+});
+
+test("日志标签区分运行时上下文、用户输入、工具结果和未执行提案", () => {
+  const event = (type: string, data: any, seq: number) => ({
+    kind: "session.event",
+    sessionId: "proactive-main",
+    event: { type, data, seq, time: seq },
+  });
+  const rows = projectEvents([
+    event(
+      "user/message",
+      {
+        id: "system-context",
+        source: { kind: "plugin", plugin: "@deepseek-ai/dsh-system-prompt" },
+        content: [{ type: "text", text: "context" }],
+      },
+      1,
+    ),
+    event(
+      "user/message",
+      {
+        id: "human",
+        source: { kind: "user" },
+        content: [{ type: "text", text: "hello" }],
+      },
+      2,
+    ),
+    event(
+      "tool/call",
+      { callId: "delay", name: "controlled_delay", arguments: "{}" },
+      3,
+    ),
+    event(
+      "tool/result",
+      {
+        message: {
+          source: { callId: "delay" },
+          content: [
+            {
+              type: "tool-result",
+              content: [{ type: "text", text: '{"status":"completed"}' }],
+            },
+          ],
+        },
+      },
+      4,
+    ),
+    event(
+      "tool/call",
+      { callId: "proposal", name: "calendar_update", arguments: "{}" },
+      5,
+    ),
+    event(
+      "tool/result",
+      {
+        message: {
+          source: { callId: "proposal" },
+          content: [
+            {
+              type: "tool-result",
+              content: [{ type: "text", text: '{"status":"not_executed"}' }],
+            },
+          ],
+        },
+      },
+      6,
+    ),
+  ]);
+  expect(rows.map((row) => row.label)).toEqual([
+    "运行时上下文",
+    "用户输入",
+    "工具结果 · controlled_delay",
+    "提案 · 未执行",
+  ]);
 });

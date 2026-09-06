@@ -67,11 +67,23 @@ export function projectEvents(events: any[]): StreamRow[] {
         time,
         timestamp: e.time,
         label:
-          d.source.kind === "plugin"
-            ? "观察 / Prompt"
+          d.source.kind === "user"
+            ? item.sessionId === "proactive-main"
+              ? "用户输入"
+              : "子任务输入"
             : d.source.kind === "agent-message"
               ? "代理消息"
-              : "上下文",
+              : d.source.kind === "subagent-settled"
+                ? "子任务状态"
+                : d.source.kind === "plugin" &&
+                    d.source.plugin === "@deepseek-ai/dsh-system-prompt"
+                  ? "运行时上下文"
+                  : d.source.kind === "plugin" &&
+                      d.source.plugin === "proactive-bridge"
+                    ? item.runtimeMode === "deterministic_fixture"
+                      ? "合成观察"
+                      : "桌面观察"
+                    : "插件上下文",
         kind: "user",
         text: d.content
           .filter((b: any) => b.type === "text")
@@ -93,11 +105,28 @@ export function projectEvents(events: any[]): StreamRow[] {
     if (e.type === "tool/result") {
       const id = `${session}:tool:${d.message.source.callId}`;
       const old = rows.get(id);
+      const isProposal = d.message.content.some(
+        (block: any) =>
+          block.type === "tool-result" &&
+          block.content.some((part: any) => {
+            if (part.type !== "text") return false;
+            try {
+              return JSON.parse(part.text).status === "not_executed";
+            } catch {
+              return false;
+            }
+          }),
+      );
+      const name = old?.label.replace(/^工具意图 · /, "");
       rows.set(id, {
         id,
         time,
         timestamp: e.time,
-        label: old?.label ?? "工具结果",
+        label: isProposal
+          ? "提案 · 未执行"
+          : name
+            ? "工具结果 · " + name
+            : "工具结果",
         kind: "tool",
         text: JSON.stringify(d.message.content),
         detail: { call: old?.detail, result: item },

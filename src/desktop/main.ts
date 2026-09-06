@@ -322,7 +322,11 @@ async function bootstrap() {
             value:
               mode === "gemini"
                 ? { user_prompt: String(p.text) }
-                : { scenario: "observation", fact: String(p.text) },
+                : {
+                    scenario: "observation",
+                    fact: String(p.text),
+                    origin: "user_prompt",
+                  },
           });
         case "revise": {
           if (!runtime) throw new Error("agent_unavailable");
