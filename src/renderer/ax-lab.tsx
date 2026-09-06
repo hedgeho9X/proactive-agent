@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { attributeText, diffAX } from "./ax-diff.ts";
 import { Button } from "@/components/ui/button";
 import { AXDiffView } from "./ax-diff-view.tsx";
+import { FocusOverlay } from "./focus-overlay.tsx";
 import { hasAXEvidence, eventOrder } from "../observation/ax-history-view.ts";
 
 // 历史快照由主进程持久化；面板仅加载当前快照和对比基线。
@@ -565,11 +566,7 @@ export function AXLab() {
                     snapshot.screenshot.code}
                 </p>
                 {snapshot.screenshot.data && (
-                  <img
-                    alt="目标应用窗口快照"
-                    className="max-w-full rounded border"
-                    src={`data:image/png;base64,${snapshot.screenshot.data}`}
-                  />
+                  <FocusOverlay screenshot={snapshot.screenshot} />
                 )}
               </>
             )}

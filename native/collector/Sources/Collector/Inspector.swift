@@ -119,8 +119,23 @@ func inspectAX(_ pid: pid_t) async -> [String: Any] {
                 windowId = target.windowID
                 let config = SCStreamConfiguration()
                 config.width = min(1600, Int(target.frame.width)); config.height = max(1, Int(Double(config.width) * target.frame.height / max(1,target.frame.width))); config.showsCursor = false
-                let image = try await SCScreenshotManager.captureImage(contentFilter:SCContentFilter(desktopIndependentWindow:target), configuration:config)
-                if let png = NSBitmapImageRep(cgImage:image).representation(using:.png, properties:[:]) { screenshot = ["status":"captured", "data":png.base64EncodedString(), "selection":expected == nil ? "single_window_fallback" : "ax_bounds", "capturedAt":iso()] }
+                // 去掉窗口阴影，让图像边界和窗口 frame 对齐，缩放后也可准确叠加。
+                config.ignoreShadowsSingleWindow = true
+                let overlayBefore = probeFocusRegions(application)
+                let overlayWindowBefore = window.flatMap { bounds($0) }
+                if overlayBefore.protected { screenshot = ["status":"excluded","reason":"protected_focus_changed"] }
+                else {
+                    let image = try await SCScreenshotManager.captureImage(contentFilter:SCContentFilter(desktopIndependentWindow:target), configuration:config)
+                    let overlayAfter = probeFocusRegions(application)
+                    let windowStable = overlayWindowBefore == window.flatMap { bounds($0) } && overlayWindowBefore == expected
+                    let stable = stableFocusRegions(overlayBefore,overlayAfter) && windowStable
+                    let noFocus = overlayBefore.element == nil && overlayAfter.element == nil
+                    let regions: [String:Any] = stable || noFocus ? overlayBefore.regions : ["focus":["status":"unavailable","reason":"focus_or_selection_or_window_changed"],"selection":["status":"unavailable","reason":"focus_or_selection_or_window_changed"]]
+                    if overlayAfter.protected { screenshot = ["status":"excluded","reason":"protected_focus_changed"] }
+                    else if let png = NSBitmapImageRep(cgImage:image).representation(using:.png, properties:[:]) {
+                        screenshot = ["status":"captured", "data":png.base64EncodedString(), "selection":expected == nil ? "single_window_fallback" : "ax_bounds", "capturedAt":iso(),"frame":regionRect(target.frame),"pixelWidth":image.width,"pixelHeight":image.height,"coordinateSpace":"screen_top_left_points","shadowsExcluded":true,"regions":regions]
+                    }
+                }
             } else { screenshot = ["status":"unavailable", "reason":"window_match_ambiguous_or_missing", "candidates":matches.count] }
         } catch { screenshot = ["status":"error", "code":(error as NSError).code] }
     }
