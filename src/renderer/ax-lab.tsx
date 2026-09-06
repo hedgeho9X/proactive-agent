@@ -1,8 +1,8 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { attributeText, diffAX } from "./ax-diff.ts";
 import { Button } from "@/components/ui/button";
 
-// 快照仅保存在本面板内存；刷新或退出后不保留原始应用内容。
+// 历史快照由主进程持久化；面板仅加载当前快照和对比基线。
 export function AXLab() {
   const [apps, setApps] = useState<any[]>([]);
   const [pid, setPid] = useState("");
@@ -14,9 +14,38 @@ export function AXLab() {
   const [error, setError] = useState("");
   const [tab, setTab] = useState("attributes");
   const [countdown, setCountdown] = useState(0);
+  const [history, setHistory] = useState<any[]>([]);
+  const [notice, setNotice] = useState("");
+  const refreshHistory = async () =>
+    setHistory(await window.proactive.invoke("ax.history"));
+  useEffect(() => {
+    void refreshHistory().catch(() => setError("无法读取快照历史"));
+  }, []);
+  const manage = async (work: () => Promise<void>) => {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await work();
+      await refreshHistory();
+    } catch {
+      setError("快照操作失败，记录可能已删除或存储不可用，请刷新历史重试。");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const load = async (id: string, baseline = false) => {
+    const value = await window.proactive.invoke("ax.load", { id });
+    if (baseline) setBefore(value);
+    else {
+      setSnapshot(value);
+      setSelected(value.focusId ?? value.nodes[0]?.id ?? "");
+    }
+  };
   const capture = async () => {
     setBusy(true);
     setError("");
+    setNotice("");
     try {
       // 留出三秒让用户切回目标应用并操作输入框。
       for (let i = 3; i > 0; i--) {
@@ -31,6 +60,8 @@ export function AXLab() {
       setBefore(snapshot);
       setSnapshot(result);
       setSelected(result.focusId ?? result.nodes[0]?.id ?? "");
+      await refreshHistory();
+      setNotice("快照已保存到本地");
     } catch {
       setError(
         "采集失败：请确认目标仍在运行、权限已开启，或稍后重试（最长等待 15 秒）。",
@@ -50,7 +81,7 @@ export function AXLab() {
       <header className="border-b p-4">
         <h1 className="text-lg font-semibold">AX 观测台</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          手动检查应用暴露的界面信息。快照仅驻留内存，不自动上传模型。
+          快照自动保存到本地，不自动上传模型。复制 ID 后可发给 Codex 一起分析。
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button
@@ -90,7 +121,7 @@ export function AXLab() {
             {busy
               ? countdown
                 ? `${countdown} 秒后采集，请切回目标应用`
-                : "正在采集…"
+                : "处理中…"
               : "采集快照（延迟 3 秒）"}
           </Button>
           <Button
@@ -101,9 +132,123 @@ export function AXLab() {
               setBefore(null);
             }}
           >
-            清空快照
+            清除当前视图
+          </Button>
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => void manage(refreshHistory)}
+          >
+            刷新历史
+          </Button>
+          <Button
+            variant="ghost"
+            disabled={busy || !history.length}
+            onClick={() =>
+              void manage(async () => {
+                const result = await window.proactive.invoke("ax.clear");
+                if (result.cancelled) return;
+                const remaining = await window.proactive.invoke("ax.history");
+                setHistory(remaining);
+                if (
+                  !remaining.some(
+                    (item: any) => item.id === snapshot?.snapshotId,
+                  )
+                )
+                  setSnapshot(null);
+                if (
+                  !remaining.some((item: any) => item.id === before?.snapshotId)
+                )
+                  setBefore(null);
+                setNotice(
+                  `已移到废纸篓 ${result.deleted} 条${result.failed.length ? `，${result.failed.length} 条失败` : ""}`,
+                );
+              })
+            }
+          >
+            一键清空历史
           </Button>
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+          <span>历史 {history.length} 条</span>
+          <select
+            aria-label="历史快照"
+            className="max-w-96 rounded border bg-background p-2 text-xs"
+            disabled={busy}
+            value={snapshot?.snapshotId ?? ""}
+            onChange={(event) => {
+              if (event.target.value)
+                void manage(() => load(event.target.value));
+            }}
+          >
+            <option value="">选择已保存快照</option>
+            {history.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.capturedAt} · {item.app} · {item.nodes} 节点 · {item.id}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="对比基线"
+            className="max-w-80 rounded border bg-background p-2 text-xs"
+            disabled={busy}
+            value={before?.snapshotId ?? ""}
+            onChange={(event) => {
+              if (event.target.value)
+                void manage(() => load(event.target.value, true));
+              else setBefore(null);
+            }}
+          >
+            <option value="">选择对比基线（可选）</option>
+            {history.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.capturedAt} · {item.app} · {item.id}
+              </option>
+            ))}
+          </select>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy || !snapshot?.snapshotId}
+            onClick={() =>
+              void manage(async () => {
+                await window.proactive.invoke("ax.copy", {
+                  id: snapshot.snapshotId,
+                });
+                setNotice("已复制快照 ID 和本地文件路径，可直接粘贴给 Codex");
+              })
+            }
+          >
+            复制 ID
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy || !snapshot?.snapshotId}
+            onClick={() =>
+              void manage(async () => {
+                await window.proactive.invoke("ax.delete", {
+                  id: snapshot.snapshotId,
+                });
+                if (before?.snapshotId === snapshot.snapshotId) setBefore(null);
+                setSnapshot(null);
+                setNotice("快照已移到系统废纸篓，可恢复");
+              })
+            }
+          >
+            删除当前快照
+          </Button>
+        </div>
+        {snapshot?.snapshotId && (
+          <p className="mt-2 break-all text-xs text-muted-foreground">
+            ID：{snapshot.snapshotId}
+          </p>
+        )}
+        {notice && (
+          <p role="status" className="mt-2 text-sm">
+            {notice}
+          </p>
+        )}
         {error && (
           <p role="alert" className="mt-2 text-sm text-red-700">
             {error}

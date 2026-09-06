@@ -4,7 +4,15 @@ import { ActionQueue } from "../model/queue.ts";
 import { DatabaseSync } from "node:sqlite";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { app, BrowserWindow, ipcMain, dialog } from "electron";
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  shell,
+  clipboard,
+} from "electron";
+import { AXHistory } from "../observation/ax-history.ts";
 import { join, resolve } from "node:path";
 import {
   mkdir,
@@ -252,6 +260,10 @@ app.on("before-quit", (event) => {
 async function bootstrap() {
   console.error("[proactive] bootstrap:ready");
   await mkdir(app.getPath("userData"), { recursive: true });
+  const axHistory = new AXHistory(
+    join(app.getPath("userData"), "ax-snapshots"),
+    (path) => shell.trashItem(path),
+  );
   modelRoles = new ModelRoles(
     join(app.getPath("userData"), "model-roles.json"),
   );
@@ -377,7 +389,38 @@ async function bootstrap() {
             args,
             { timeout: 15000, maxBuffer: 24 * 1024 * 1024 },
           );
-          return JSON.parse(stdout);
+          const result = JSON.parse(stdout);
+          return method === "ax.inspect" && !result.error
+            ? axHistory.save(result)
+            : result;
+        }
+        case "ax.history":
+          return axHistory.list();
+        case "ax.load":
+          return axHistory.get(String(p.id));
+        case "ax.copy": {
+          const item = await axHistory.get(String(p.id));
+          clipboard.writeText(
+            `AX 快照 ID：${item.snapshotId}\n本地文件：${item.file}`,
+          );
+          return { copied: true };
+        }
+        case "ax.delete":
+          await axHistory.remove(String(p.id));
+          return { deleted: true };
+        case "ax.clear": {
+          const choice = await dialog.showMessageBox({
+            type: "warning",
+            buttons: ["取消", "移到废纸篓"],
+            defaultId: 0,
+            cancelId: 0,
+            message: "清空 AX 观测台的所有历史快照？",
+            detail:
+              "仅移除观测台快照，不影响观察流水、模型配置或 Agent 会话。可从系统废纸篓恢复。",
+          });
+          return choice.response === 1
+            ? axHistory.clear()
+            : { cancelled: true };
         }
         case "observation":
           return observation(String(p.actionId));
