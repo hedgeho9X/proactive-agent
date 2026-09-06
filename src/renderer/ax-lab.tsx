@@ -363,6 +363,18 @@ export function AXLab() {
             {snapshot.captureError}。按键名表示物理键，不等于输入法最终文本。
           </p>
         )}
+        {snapshot?.timing && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            事件→截图请求：
+            {snapshot.timing.eventAt && snapshot.timing.screenshotRequestedAt
+              ? `${Date.parse(snapshot.timing.screenshotRequestedAt) - Date.parse(snapshot.timing.eventAt)}ms`
+              : "不可用"}{" "}
+            · AX 读取：{snapshot.timing.axStartedAt} →{" "}
+            {snapshot.timing.axCompletedAt} · 截图返回：
+            {snapshot.timing.screenshotCompletedAt ?? "不可用"}
+            。同一事件并行取证，非原子快照。
+          </p>
+        )}
       </header>
       {snapshot && (
         <div className="border-b px-4 py-2 text-xs text-muted-foreground">
@@ -566,7 +578,13 @@ export function AXLab() {
                     snapshot.screenshot.code}
                 </p>
                 {snapshot.screenshot.data && (
-                  <FocusOverlay screenshot={snapshot.screenshot} />
+                  <FocusOverlay
+                    screenshot={snapshot.screenshot}
+                    onSelectNode={(id) => {
+                      setSelected(id);
+                      setTab("attributes");
+                    }}
+                  />
                 )}
               </>
             )}

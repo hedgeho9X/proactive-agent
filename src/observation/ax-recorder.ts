@@ -28,6 +28,14 @@ export class AXRecorder {
     if (!captures) return;
     const captureStatus = this.captureBusy ? "skipped_busy" : "pending";
     if (captureStatus === "pending") this.captureBusy = true;
+    // 截图请求与事件落盘同时启动，避免磁盘延迟推迟取证。
+    const inspection =
+      captureStatus === "pending"
+        ? this.inspect(event).then(
+            (result) => ({ result, error: false }),
+            () => ({ result: null, error: true }),
+          )
+        : null;
     try {
       await this.history.save(
         {
@@ -47,7 +55,9 @@ export class AXRecorder {
       this.changed();
       if (captureStatus !== "pending") return;
       try {
-        const result = await this.inspect(event);
+        const outcome = await inspection!;
+        if (outcome.error) throw new Error("inspection_failed");
+        const result = outcome.result;
         const failed = !!result.error;
         await this.history.update(event.id, {
           ...result,

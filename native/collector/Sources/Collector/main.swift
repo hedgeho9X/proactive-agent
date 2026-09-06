@@ -150,6 +150,18 @@ final class Collector: @unchecked Sendable {
     }
 }
 if CommandLine.arguments.contains("--inspect-apps") { emit(["apps":inspectorApps()]); exit(0) }
+if CommandLine.arguments.contains("--inspect-stream") {
+    _ = NSApplication.shared
+    DispatchQueue.global().async {
+        while let line = readLine() {
+            guard let data = line.data(using:.utf8), let message = try? JSONSerialization.jsonObject(with:data) as? [String:Any], let event = message["event"] as? [String:Any], let pid = event["pid"] as? Int32, let requestId = message["requestId"] as? String else { continue }
+            Task { let result = await inspectAX(pid,trigger:event); emit(["type":"inspection","requestId":requestId,"result":result]) }
+        }
+        exit(0)
+    }
+    emit(["type":"inspector_ready"])
+    RunLoop.main.run();exit(0)
+}
 if CommandLine.arguments.contains("--watch-input") {
     _ = NSApplication.shared
     let watcher = InputWatch(); watcher.start()

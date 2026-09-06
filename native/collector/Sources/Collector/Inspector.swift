@@ -9,11 +9,16 @@ func inspectorApps() -> [[String: Any]] {
     }
 }
 
-func inspectAX(_ pid: pid_t) async -> [String: Any] {
+func inspectAX(_ pid: pid_t, trigger: [String:Any]? = nil) async -> [String: Any] {
     let began = Date()
     guard let app = NSRunningApplication(processIdentifier: pid) else { return ["error":"目标应用已退出"] }
-    let requireForeground = CommandLine.arguments.contains("--require-foreground")
+    let requireForeground = trigger?["kind"] as? String != "click" && (trigger != nil || CommandLine.arguments.contains("--require-foreground"))
     if requireForeground && NSWorkspace.shared.frontmostApplication?.processIdentifier != pid { return ["error":"foreground_changed_before_capture"] }
+    let captureGate = AsyncStream<Void>.makeStream()
+    let captureTask = Task.detached {
+        defer { captureGate.continuation.finish() }
+        return await captureEventEvidence(pid,trigger:trigger,requested:{ captureGate.continuation.yield(());captureGate.continuation.finish() })
+    }
     let application = AXUIElementCreateApplication(pid)
     var nodes = [[String: Any]]()
     var refs = [AXUIElement]()
@@ -95,54 +100,50 @@ func inspectAX(_ pid: pid_t) async -> [String: Any] {
         nodes.append(["id":id, "parent":parent as Any? ?? NSNull(), "path":path, "protected":secure, "attributes":attributes, "attributeListCode":listError.rawValue, "parameterizedAttributes":parameterized as? [String] ?? [], "parameterizedCode":parameterError.rawValue, "actions":actions as? [String] ?? [], "actionsCode":actionError.rawValue])
         if walkChildren { for (index, child) in children.enumerated() { visit(child, parent:id, path:"\(path)/\(index)", depth:depth + 1) } }
     }
+    // 截图请求发出后立即开始这次 AX 读取，根窗口和焦点也使用这个采样阶段。
+    for await _ in captureGate.stream { break }
+    let axStartedAt = preciseTimestamp()
     AXUIElementSetMessagingTimeout(application, 0.03)
-    let (windowError, windowValue) = read(application, kAXFocusedWindowAttribute)
+    let (windowError, focusedWindowValue) = read(application, kAXFocusedWindowAttribute)
+    let treeClick = probeClickRegion(pid,trigger)
+    let windowValue = treeClick.element.flatMap { attribute($0,kAXWindowAttribute) } ?? focusedWindowValue
     let window = windowValue.flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil }
     let (focusError, focusValue) = read(application, kAXFocusedUIElementAttribute)
     let focus = focusValue.flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil }
-    // 焦点优先独立读取，避免大树耗尽预算后丢失输入框。
+    // 焦点优先读取，完整树与截图任务并行；分别保存实际采样时间。
     if let focus { visit(focus, parent:nil, path:"focus", depth:0, walkChildren:false) }
     visit(window ?? application, parent:nil, path:"window", depth:0)
-    var screenshot: [String: Any] = ["status":"unavailable"]
-    var windowId: UInt32?
-    if protectedFound { screenshot = ["status":"excluded", "reason":"protected_input"] }
-    else {
-        do {
-            let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly:true)
-            let windows = content.windows.filter { $0.owningApplication?.processID == pid && $0.windowLayer == 0 }
-            let expected = window.flatMap { bounds($0) }
-            let matches = windows.filter { candidate in
-                guard let expected else { return true }
-                return abs(candidate.frame.minX - expected.minX) < 2 && abs(candidate.frame.minY - expected.minY) < 2 && abs(candidate.frame.width - expected.width) < 2 && abs(candidate.frame.height - expected.height) < 2
+    let axCompletedAt = preciseTimestamp()
+    var capture = await captureTask.value
+    if protectedFound { capture.screenshot = ["status":"excluded","reason":"protected_node_in_tree"] }
+    var screenshot = capture.screenshot
+    let windowId = capture.windowId
+    // 截图区域绑定它自己采样的元素，禁止复用较早的 treeFocusId。
+    func attachRegionNode(_ probe: FocusRegionProbe?, path: String) -> String? {
+        guard let probe, let element = probe.element, !probe.protected else { return nil }
+        let id = identifier(element)
+        if !nodes.contains(where: { $0["id"] as? String == id }) {
+            nodes.append(["id":id,"parent":NSNull(),"path":path,"protected":false,"attributes":probe.attributes,"actions":[],"parameterizedAttributes":[],"source":"screenshot_region_probe"])
+        }
+        return id
+    }
+    let screenshotFocusId = attachRegionNode(capture.focus,path:"screenshot-focus")
+    let clickedId = attachRegionNode(capture.click,path:"screenshot-click")
+    if var regions = screenshot["regions"] as? [String:Any] {
+        for (name,id,probe) in [("focus",screenshotFocusId,capture.focus),("selection",screenshotFocusId,capture.focus),("click",clickedId,capture.click)] {
+            if var region = regions[name] as? [String:Any] {
+                region["nodeId"] = id as Any? ?? NSNull()
+                region["sampledAttributes"] = probe?.attributes ?? [:]
+                region["sampledAt"] = probe.map { preciseTimestamp($0.sampledAt) } as Any? ?? NSNull()
+                regions[name] = region
             }
-            if matches.count == 1, let target = matches.first {
-                windowId = target.windowID
-                let config = SCStreamConfiguration()
-                config.width = min(1600, Int(target.frame.width)); config.height = max(1, Int(Double(config.width) * target.frame.height / max(1,target.frame.width))); config.showsCursor = false
-                // 去掉窗口阴影，让图像边界和窗口 frame 对齐，缩放后也可准确叠加。
-                config.ignoreShadowsSingleWindow = true
-                let overlayBefore = probeFocusRegions(application)
-                let overlayWindowBefore = window.flatMap { bounds($0) }
-                if overlayBefore.protected { screenshot = ["status":"excluded","reason":"protected_focus_changed"] }
-                else {
-                    let image = try await SCScreenshotManager.captureImage(contentFilter:SCContentFilter(desktopIndependentWindow:target), configuration:config)
-                    let overlayAfter = probeFocusRegions(application)
-                    let windowStable = overlayWindowBefore == window.flatMap { bounds($0) } && overlayWindowBefore == expected
-                    let stable = stableFocusRegions(overlayBefore,overlayAfter) && windowStable
-                    let noFocus = overlayBefore.element == nil && overlayAfter.element == nil
-                    let regions: [String:Any] = stable || noFocus ? overlayBefore.regions : ["focus":["status":"unavailable","reason":"focus_or_selection_or_window_changed"],"selection":["status":"unavailable","reason":"focus_or_selection_or_window_changed"]]
-                    if overlayAfter.protected { screenshot = ["status":"excluded","reason":"protected_focus_changed"] }
-                    else if let png = NSBitmapImageRep(cgImage:image).representation(using:.png, properties:[:]) {
-                        screenshot = ["status":"captured", "data":png.base64EncodedString(), "selection":expected == nil ? "single_window_fallback" : "ax_bounds", "capturedAt":iso(),"frame":regionRect(target.frame),"pixelWidth":image.width,"pixelHeight":image.height,"coordinateSpace":"screen_top_left_points","shadowsExcluded":true,"regions":regions]
-                    }
-                }
-            } else { screenshot = ["status":"unavailable", "reason":"window_match_ambiguous_or_missing", "candidates":matches.count] }
-        } catch { screenshot = ["status":"error", "code":(error as NSError).code] }
+        }
+        screenshot["regions"] = regions
     }
     if requireForeground {
         if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid { return ["error":"foreground_changed_during_capture"] }
         if let window, let current = attribute(application,kAXFocusedWindowAttribute), CFGetTypeID(current) == AXUIElementGetTypeID(), !CFEqual(window,current) { return ["error":"window_changed_during_capture"] }
     }
     let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime,.withFractionalSeconds]
-    return ["captureSchema":2,"appLaunchedAt":app.launchDate.map { formatter.string(from:$0) } ?? "","windowId":windowId as Any? ?? NSNull(),"pid":Int(pid), "app":app.localizedName ?? "", "bundleId":app.bundleIdentifier ?? "", "capturedAt":formatter.string(from:began), "elapsedMs":Int(Date().timeIntervalSince(began)*1000), "nodes":nodes, "partial":partial, "limits":["nodes":800,"depth":20,"milliseconds":3000,"textCharacters":8000], "windowCode":windowError.rawValue, "focusCode":focusError.rawValue, "focusId":focus.map { identifier($0) } as Any? ?? NSNull(), "permissions":permissions(), "screenshot":screenshot]
+    return ["captureSchema":3,"axRootScope":window == nil ? "application" : "window","timing":["eventAt":trigger?["occurredAt"] as Any? ?? NSNull(),"requestReceivedAt":preciseTimestamp(began),"axStartedAt":axStartedAt,"axCompletedAt":axCompletedAt,"screenshotRequestedAt":screenshot["requestedAt"] as Any? ?? NSNull(),"screenshotCompletedAt":screenshot["capturedAt"] as Any? ?? NSNull(),"nonAtomic":true],"treeFocusId":focus.map { identifier($0) } as Any? ?? NSNull(),"clickedId":clickedId as Any? ?? NSNull(),"appLaunchedAt":app.launchDate.map { formatter.string(from:$0) } ?? "","windowId":windowId as Any? ?? NSNull(),"pid":Int(pid), "app":app.localizedName ?? "", "bundleId":app.bundleIdentifier ?? "", "capturedAt":formatter.string(from:began), "elapsedMs":Int(Date().timeIntervalSince(began)*1000), "nodes":nodes, "partial":partial, "limits":["nodes":800,"depth":20,"milliseconds":3000,"textCharacters":8000], "windowCode":windowError.rawValue, "focusCode":focusError.rawValue, "focusId":screenshotFocusId as Any? ?? NSNull(), "permissions":permissions(), "screenshot":screenshot]
 }

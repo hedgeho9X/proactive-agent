@@ -14,6 +14,7 @@ import {
 } from "electron";
 import { AXHistory } from "../observation/ax-history.ts";
 import { AXRecorder } from "../observation/ax-recorder.ts";
+import { AXInspectorClient } from "../observation/ax-inspector-client.ts";
 import { precedingAXEvent } from "../observation/ax-history-view.ts";
 import { join, resolve } from "node:path";
 import {
@@ -44,6 +45,7 @@ let window: BrowserWindow | undefined;
 let store: EvidenceStore;
 let collector: NativeCollectorHost;
 let axRecorder: AXRecorder | undefined;
+let axInspector: AXInspectorClient | undefined;
 let runtime: RuntimeHost | undefined;
 let runtimeReady = false;
 let modelRoles: ModelRoles;
@@ -230,6 +232,7 @@ async function closeAll() {
   understanding?.abort();
   try {
     await axRecorder?.stop();
+    await axInspector?.close();
     await collector?.stop();
   } finally {
     try {
@@ -268,16 +271,14 @@ async function bootstrap() {
     join(app.getPath("userData"), "ax-snapshots"),
     (path) => shell.trashItem(path),
   );
+  axInspector = new AXInspectorClient(
+    join(app.getAppPath(), "dist", "native", "ProactiveCollector"),
+  );
   axRecorder = new AXRecorder(
     join(app.getAppPath(), "dist", "native", "ProactiveCollector"),
     axHistory,
     async (event) => {
-      const { stdout } = await promisify(execFile)(
-        join(app.getAppPath(), "dist", "native", "ProactiveCollector"),
-        ["--inspect", String(event.pid), "--require-foreground"],
-        { timeout: 15000, maxBuffer: 24 * 1024 * 1024 },
-      );
-      const result = JSON.parse(stdout);
+      const result = await axInspector!.inspect(event);
       if (
         result.appLaunchedAt &&
         event.appLaunchedAt &&
@@ -423,9 +424,13 @@ async function bootstrap() {
         case "ax.record.status":
           return axRecorder!.status();
         case "ax.record.start":
+          await axInspector!.start();
           return axRecorder!.start();
-        case "ax.record.stop":
-          return axRecorder!.stop();
+        case "ax.record.stop": {
+          const status = await axRecorder!.stop();
+          await axInspector!.close();
+          return status;
+        }
         case "ax.load":
           return axHistory.get(String(p.id));
         case "ax.loadPair": {

@@ -11,6 +11,8 @@ struct FocusRegionProbe {
     let range: CFTypeRef?
     let protected: Bool
     let regions: [String: Any]
+    var attributes: [String: Any] = [:]
+    var sampledAt: Date = Date()
 }
 func probeFocusRegions(_ application: AXUIElement) -> FocusRegionProbe {
     var value: CFTypeRef?
@@ -41,14 +43,44 @@ func probeFocusRegions(_ application: AXUIElement) -> FocusRegionProbe {
         }
     } else { selection = ["status":"unavailable","code":rangeError.rawValue,"reason":"selected_range_unavailable"] }
     let focus: [String:Any] = frame.map { ["status":"available","rect":regionRect($0),"source":"AXPosition+AXSize"] } ?? ["status":"unavailable","reason":"focus_bounds_unavailable"]
-    return FocusRegionProbe(element:element,frame:frame,range:rangeValue,protected:false,regions:["focus":focus,"selection":selection])
+    var probe = FocusRegionProbe(element:element,frame:frame,range:rangeValue,protected:false,regions:["focus":focus,"selection":selection])
+    for name in [kAXRoleAttribute,kAXTitleAttribute,kAXIdentifierAttribute,kAXDescriptionAttribute] {
+        if let text = attribute(element,name) as? String { probe.attributes[name] = ["status":"ok","value":["text":String(text.prefix(4000)),"truncated":text.count>4000]] }
+    }
+    if let frame { probe.attributes[kAXPositionAttribute] = ["status":"ok","value":["x":frame.minX,"y":frame.minY]]; probe.attributes[kAXSizeAttribute] = ["status":"ok","value":["width":frame.width,"height":frame.height]] }
+    probe.sampledAt = Date()
+    return probe
+}
+func stableFocusControl(_ before: FocusRegionProbe, _ after: FocusRegionProbe) -> Bool {
+    guard let a = before.element, let b = after.element, CFEqual(a,b), before.frame == after.frame, !after.protected else { return false }
+    return true
 }
 func stableFocusRegions(_ before: FocusRegionProbe, _ after: FocusRegionProbe) -> Bool {
-    guard let a = before.element, let b = after.element, CFEqual(a,b), before.frame == after.frame, !after.protected else { return false }
-    guard NSDictionary(dictionary:before.regions).isEqual(to:after.regions) else { return false }
+    guard stableFocusControl(before,after) else { return false }
+    let a = before.regions["selection"] as? [String:Any] ?? [:]
+    let b = after.regions["selection"] as? [String:Any] ?? [:]
+    guard NSDictionary(dictionary:a).isEqual(to:b) else { return false }
     switch (before.range,after.range) {
     case (nil,nil): return true
     case let (a?,b?): return CFEqual(a,b)
     default: return false
     }
+}
+
+// 点击命中独立于键盘焦点；只接受属于目标进程的 AX 元素。
+func probeClickRegion(_ pid: pid_t, _ trigger: [String:Any]?) -> FocusRegionProbe {
+    guard trigger?["kind"] as? String == "click", let x = trigger?["x"] as? Double, let y = trigger?["y"] as? Double else { return FocusRegionProbe(element:nil,frame:nil,range:nil,protected:false,regions:["click":["status":"not_applicable"]]) }
+    let system = AXUIElementCreateSystemWide(); AXUIElementSetMessagingTimeout(system,0.015)
+    var element: AXUIElement?
+    let error = AXUIElementCopyElementAtPosition(system,Float(x),Float(y),&element)
+    guard error == .success, let element else { return FocusRegionProbe(element:nil,frame:nil,range:nil,protected:false,regions:["click":["status":"unavailable","reason":"hit_test_failed","code":error.rawValue]]) }
+    var actual:pid_t = 0; AXUIElementGetPid(element,&actual)
+    guard actual == pid else { return FocusRegionProbe(element:nil,frame:nil,range:nil,protected:false,regions:["click":["status":"unavailable","reason":"hit_target_changed"]]) }
+    AXUIElementSetMessagingTimeout(element,0.015)
+    let secure = attribute(element,kAXSubroleAttribute) as? String == "AXSecureTextField"
+    let frame = secure ? nil : bounds(element)
+    var probe = FocusRegionProbe(element:element,frame:frame,range:nil,protected:secure,regions:["click":frame.map { ["status":"available","rect":regionRect($0),"source":"AXHitTest"] } ?? ["status":secure ? "excluded":"unavailable","reason":secure ? "protected_input":"hit_bounds_unavailable"]])
+    if !secure { for name in [kAXRoleAttribute,kAXTitleAttribute,kAXIdentifierAttribute] { if let text = attribute(element,name) as? String { probe.attributes[name] = ["status":"ok","value":["text":String(text.prefix(4000))]] } } }
+    probe.sampledAt = Date()
+    return probe
 }

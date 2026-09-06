@@ -2,14 +2,23 @@ import React, { useState } from "react";
 import { projectBBox } from "./bbox.ts";
 
 const reason = (item: any) =>
-  item?.status === "no_selection"
-    ? "只有光标，没有文字选区"
-    : (item?.reason ?? "应用未提供范围");
-export function FocusOverlay({ screenshot }: { screenshot: any }) {
+  item?.status === "not_applicable"
+    ? "本次不是点击事件"
+    : item?.status === "no_selection"
+      ? "只有光标，没有文字选区"
+      : (item?.reason ?? "应用未提供范围");
+export function FocusOverlay({
+  screenshot,
+  onSelectNode,
+}: {
+  screenshot: any;
+  onSelectNode?: (id: string) => void;
+}) {
   const [enabled, setEnabled] = useState(true);
   const [opacity, setOpacity] = useState(0.22);
   const [focusColor, setFocusColor] = useState("#3b82f6");
   const [selectionColor, setSelectionColor] = useState("#f59e0b");
+  const [clickColor, setClickColor] = useState("#10b981");
   const [mode, setMode] = useState("both");
   const mapped =
     screenshot.coordinateSpace === "screen_top_left_points" &&
@@ -17,6 +26,7 @@ export function FocusOverlay({ screenshot }: { screenshot: any }) {
   const layers = [
     { key: "focus", label: "焦点控件", color: focusColor },
     { key: "selection", label: "文字选区", color: selectionColor },
+    { key: "click", label: "点击命中", color: clickColor },
   ].map((layer) => ({
     ...layer,
     source: screenshot.regions?.[layer.key],
@@ -41,9 +51,10 @@ export function FocusOverlay({ screenshot }: { screenshot: any }) {
           value={mode}
           onChange={(e) => setMode(e.target.value)}
         >
-          <option value="both">焦点＋选区</option>
+          <option value="both">全部区域</option>
           <option value="focus">仅焦点控件</option>
           <option value="selection">仅文字选区</option>
+          <option value="click">仅点击命中</option>
         </select>
         <label className="flex items-center gap-1">
           透明度{" "}
@@ -76,6 +87,15 @@ export function FocusOverlay({ screenshot }: { screenshot: any }) {
             onChange={(e) => setSelectionColor(e.target.value)}
           />
         </label>
+        <label className="flex items-center gap-1">
+          点击颜色
+          <input
+            aria-label="点击颜色"
+            type="color"
+            value={clickColor}
+            onChange={(e) => setClickColor(e.target.value)}
+          />
+        </label>
       </div>
       {!mapped && (
         <p className="text-sm text-muted-foreground">
@@ -90,10 +110,24 @@ export function FocusOverlay({ screenshot }: { screenshot: any }) {
               {layer.box
                 ? `${Math.round(layer.source.rect.width)} × ${Math.round(layer.source.rect.height)} pt${layer.box.clipped ? "（已裁剪到窗口内）" : ""}`
                 : reason(layer.source)}
+              {layer.source?.sampledAt && (
+                <span className="ml-2">采样完成 {layer.source.sampledAt}</span>
+              )}
+              {layer.source?.nodeId && (
+                <button
+                  className="ml-2 underline"
+                  onClick={() => onSelectNode?.(layer.source.nodeId)}
+                >
+                  {layer.source.nodeId} ·{" "}
+                  {layer.source.sampledAttributes?.AXRole?.value?.text ??
+                    "查看节点"}
+                </button>
+              )}
             </p>
           ))}
           <p>
-            焦点表示整个控件；文字选区为应用提供的外接矩形，多行选择不一定贴合每行文字。颜色为本地覆盖层，不修改原图。
+            焦点表示键盘输入控件，绿色表示点击位置命中的控件，文字选区为外接矩形。区域采样：
+            {screenshot.regionsSampledAt ?? "未记录"}。颜色不修改原图。
           </p>
         </div>
       )}

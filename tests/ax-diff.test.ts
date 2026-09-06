@@ -1,5 +1,21 @@
 import { test, expect } from "bun:test";
-import { diffAX, alignDiffLines } from "../src/renderer/ax-diff.ts";
+import {
+  diffAX,
+  alignDiffLines,
+  comparisonIssue,
+} from "../src/renderer/ax-diff.ts";
+
+test("应用级降级树不与窗口树混作同一范围", () => {
+  const a = {
+    pid: 1,
+    bundleId: "fixture",
+    axRootScope: "application",
+    nodes: [],
+  };
+  expect(comparisonIssue(a, { ...a, axRootScope: "window" })).toContain(
+    "采集范围不同",
+  );
+});
 
 test("Git式对齐保留插入行之后的相同行", () => {
   const rows = alignDiffLines(["a", "c"], ["a", "b", "c"]);

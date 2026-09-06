@@ -30,6 +30,12 @@ export function comparisonIssue(before: any, after: any): string | null {
   if (before.windowId && after.windowId && before.windowId !== after.windowId)
     return "两份快照属于不同窗口，不能对比";
   if (
+    before.axRootScope &&
+    after.axRootScope &&
+    before.axRootScope !== after.axRootScope
+  )
+    return "两份 AX 的采集范围不同（应用树与窗口树），不能按同一棵树对比";
+  if (
     [before, after].some(
       (s) => s.captureStatus && s.captureStatus !== "captured",
     )

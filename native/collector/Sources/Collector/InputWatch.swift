@@ -9,7 +9,7 @@ final class InputWatch {
     var sequence = 0
     func start() {
         guard CGPreflightListenEventAccess() else { emit(["type":"watch_error","reason":"input_monitoring_required"]); exit(1) }
-        let types: [CGEventType] = [.keyDown,.leftMouseUp,.rightMouseUp,.otherMouseUp]
+        let types: [CGEventType] = [.keyDown,.leftMouseDown,.rightMouseDown,.otherMouseDown]
         let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
         tap = CGEvent.tapCreate(tap:.cgSessionEventTap,place:.headInsertEventTap,options:.listenOnly,eventsOfInterest:mask,callback:{ _,type,event,info in
             if let info { Unmanaged<InputWatch>.fromOpaque(info).takeUnretainedValue().receive(type,event) }
@@ -23,7 +23,19 @@ final class InputWatch {
     }
     func receive(_ type: CGEventType, _ event: CGEvent) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput { emit(["type":"watch_error","reason":"event_tap_disabled"]); exit(1) }
-        guard let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier != getppid(), app.processIdentifier != getpid(), app.bundleIdentifier != "io.github.hedgeho9x.proactive-agent" else { return }
+        let receivedAt = Date()
+        var target = NSWorkspace.shared.frontmostApplication
+        var targetBasis = "frontmost_at_event"
+        if type != .keyDown {
+            // 鼠标按下时前台可能尚未切换，优先定位光标命中的进程。
+            let system = AXUIElementCreateSystemWide();AXUIElementSetMessagingTimeout(system,0.005)
+            var hit:AXUIElement?
+            if AXUIElementCopyElementAtPosition(system,Float(event.location.x),Float(event.location.y),&hit) == .success, let hit {
+                var pid:pid_t = 0
+                if AXUIElementGetPid(hit,&pid) == .success { target = NSRunningApplication(processIdentifier:pid);targetBasis = "hit_test_at_mouse_down" }
+            } else { targetBasis = "frontmost_hit_test_unavailable" }
+        }
+        guard let app = target, app.processIdentifier != getppid(), app.processIdentifier != getpid(), app.bundleIdentifier != "io.github.hedgeho9x.proactive-agent" else { return }
         let keyNames: [Int64:String] = [0:"A",1:"S",2:"D",3:"F",4:"H",5:"G",6:"Z",7:"X",8:"C",9:"V",11:"B",12:"Q",13:"W",14:"E",15:"R",16:"Y",17:"T",18:"1",19:"2",20:"3",21:"4",22:"6",23:"5",24:"=",25:"9",26:"7",27:"-",28:"8",29:"0",30:"]",31:"O",32:"U",33:"[",34:"I",35:"P",36:"Enter",37:"L",38:"J",39:"Quote",40:"K",41:";",42:"Backslash",43:",",44:"/",45:"N",46:"M",47:".",48:"Tab",49:"Space",50:"Backquote",51:"Backspace",53:"Escape",55:"Command",56:"Shift",57:"CapsLock",58:"Option",59:"Control",60:"RightShift",61:"RightOption",62:"RightControl",63:"Fn",76:"NumpadEnter",96:"F5",97:"F6",98:"F7",99:"F3",100:"F8",101:"F9",103:"F11",109:"F10",111:"F12",115:"Home",116:"PageUp",117:"Delete",118:"F4",119:"End",120:"F2",121:"PageDown",122:"F1",123:"Left",124:"Right",125:"Down",126:"Up"]
         let keyboard = type == .keyDown || type == .keyUp || type == .flagsChanged
         let code = event.getIntegerValueField(.keyboardEventKeycode)
@@ -31,7 +43,7 @@ final class InputWatch {
         for (flag,name) in [(CGEventFlags.maskCommand,"Cmd"),(.maskShift,"Shift"),(.maskAlternate,"Option"),(.maskControl,"Ctrl"),(.maskSecondaryFn,"Fn")] { if event.flags.contains(flag) { modifiers.append(name) } }
         let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime,.withFractionalSeconds]
         sequence += 1
-        var value: [String:Any] = ["id":"ax-" + UUID().uuidString.lowercased(),"session":session,"sequence":sequence,"occurredAt":formatter.string(from:Date()),"monotonicNs":String(event.timestamp),"pid":Int(app.processIdentifier),"app":app.localizedName ?? "","bundleId":app.bundleIdentifier ?? "","appLaunchedAt":app.launchDate.map { formatter.string(from:$0) } ?? "","kind":type == .keyDown ? "key_down" : type == .keyUp ? "key_up" : type == .flagsChanged ? "modifiers_changed" : "click","modifiers":modifiers,"targetBasis":"frontmost_at_event"]
+        var value: [String:Any] = ["id":"ax-" + UUID().uuidString.lowercased(),"session":session,"sequence":sequence,"occurredAt":formatter.string(from:receivedAt),"monotonicNs":String(event.timestamp),"pid":Int(app.processIdentifier),"app":app.localizedName ?? "","bundleId":app.bundleIdentifier ?? "","appLaunchedAt":app.launchDate.map { formatter.string(from:$0) } ?? "","kind":type == .keyDown ? "key_down" : "click","phase":"down","modifiers":modifiers,"targetBasis":targetBasis]
         if keyboard { value["keyCode"] = code; value["key"] = keyNames[code] ?? "Key\(code)"; value["repeat"] = event.getIntegerValueField(.keyboardEventAutorepeat) != 0 }
         else { value["button"] = event.getIntegerValueField(.mouseEventButtonNumber); value["x"] = event.location.x; value["y"] = event.location.y; value["clickCount"] = event.getIntegerValueField(.mouseEventClickState) }
         emit(["type":"input_event","event":value])
