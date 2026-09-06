@@ -45,6 +45,20 @@ await Promise.all([
     loader: { ".css": "css" },
   }),
 ]);
+// Tailwind CLI 处理主题和扫描类名，避免 esbuild 把未展开指令直接输出。
+execFileSync(
+  "bunx",
+  [
+    "--bun",
+    "@tailwindcss/cli",
+    "-i",
+    "src/renderer/style.css",
+    "-o",
+    "dist/renderer/app.css",
+    "--minify",
+  ],
+  { stdio: "inherit" },
+);
 await copyFile("src/renderer/index.html", "dist/renderer/index.html");
 
 if (existsSync("native/collector/.build/debug/ProactiveCollector")) {
