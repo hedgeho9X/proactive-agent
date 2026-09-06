@@ -224,3 +224,72 @@ test("图片附件经过真实持久层抵达 adapter，正文引用不影响 ac
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("continuable child已retire后仍可冷恢复修正，idle取消不重新执行", async () => {
+  const root = await mkdtemp(join(tmpdir(), "proactive-cold-"));
+  const host = new RuntimeHost(root, { delayMs: 50 });
+  const events: any[] = [];
+  host.on("event", (event) => events.push(event));
+  try {
+    await host.ready;
+    await host.request("observe", {
+      actionId: "cold-action",
+      value: { scenario: "dispatch", taskId: "cold-task", target: "Monday" },
+    });
+    await until(() => events.some((e) => e.kind === "task.started"));
+    const childId = events.find((e) => e.kind === "task.started").childId;
+    await until(() =>
+      events.some(
+        (e) => e.kind === "agent.disposed" && e.sessionId === childId,
+      ),
+    );
+    expect(
+      await host.request("revise", { taskId: "cold-task", target: "Friday" }),
+    ).toMatchObject({ revision: 2 });
+    await until(() => events.some((e) => e.kind === "proposal"));
+    expect(events.find((e) => e.kind === "proposal").proposal).toMatchObject({
+      revision: 2,
+      target: "Friday",
+      status: "not_executed",
+    });
+    await until(
+      () =>
+        events.filter(
+          (e) => e.kind === "agent.disposed" && e.sessionId === childId,
+        ).length === 2,
+    );
+    expect(await host.request("cancel", { taskId: "cold-task" })).toMatchObject(
+      { status: "stopped" },
+    );
+    expect(events.filter((e) => e.kind === "tool.delay.started")).toHaveLength(
+      1,
+    );
+  } finally {
+    await host.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("子消息拒绝时回滚revision和target", async () => {
+  const { ProactiveRuntime } = await import("../src/runtime.ts");
+  const root = await mkdtemp(join(tmpdir(), "proactive-reject-"));
+  const runtime = new ProactiveRuntime(root, () => {}, 1);
+  try {
+    await runtime.start();
+    runtime.tasks.set("missing", {
+      taskId: "missing",
+      childId: "not-a-child",
+      revision: 1,
+      target: "Monday",
+      status: "running",
+    });
+    await expect(runtime.revise("missing", "Friday")).rejects.toThrow();
+    expect(runtime.tasks.get("missing")).toMatchObject({
+      revision: 1,
+      target: "Monday",
+    });
+  } finally {
+    await runtime.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

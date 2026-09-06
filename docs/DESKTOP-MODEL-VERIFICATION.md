@@ -58,3 +58,7 @@ Key 从界面经父子私有 IPC 传给 runtime，仅存在当前进程内存，
 主Agent首次实际GUI启动发现进程存活但无窗口、无CDP端口、无数据目录；采样停在ElectronMain/Node事件循环。原因是Electron的ESM入口在模块求值完成前不进入ready，本入口顶层 `await app.whenReady()` 形成循环。改为同步注册 `app.whenReady().then(bootstrap)`，after-ready初始化全部进入异步bootstrap，增加阶段日志和启动失败归因。参考 [Electron ESM lifecycle](https://www.electronjs.org/docs/latest/tutorial/esm)。
 
 无GUI回归通过：使用真实编译入口和SourceTextModule，保持mock ready永久pending，入口仍须完成求值，避免相同死锁。主Agent随后实际启动确认 bootstrap:ready / window-loaded、9337 file页面和Fixture主子轨迹，截图布局正常。此验证与前面的Node模式验证分别记录。
+
+## 已退休子代理的续聊修复
+
+主Agent在真实UI中发现：子代理完成并retire后发送修正，DSH提示缺少session query。S0只覆盖了运行中的steering，不能证明冷恢复。现挂载同版本 `dsh-session-query-sqlite`（`openAt: never`），仅启用公开的exact-read/cold-resume，不打开全文索引数据库。新增真实 `agent.disposed` 后续聊回归，确认同一child ID恢复并生成 revision 2 / Friday / not_executed 提案；再次retire后的取消返回stopped且不重执行工具。入队失败同时回滚revision/target，不能UI报错却悄悄修改版本。两项针对性测试6断言通过。这仍不代表应用重启后业务task map已恢复。

@@ -1,3 +1,4 @@
+import SessionQuery from "@deepseek-ai/dsh-session-query-sqlite";
 import { GeminiAdapter, type ModelConfig } from "./model/gemini.ts";
 import {
   registerCapabilities,
@@ -192,6 +193,10 @@ export class ProactiveRuntime {
       compression: "none",
       packChunks: false,
     });
+    await this.ctx.plugin(SessionQuery, {
+      path: this.root + "/session-query.sqlite",
+      openAt: "never",
+    });
     await this.ctx.plugin(Attachments, { dshHome: this.root });
     await this.ctx.plugin(Loop, { agents: [] });
     await this.ctx.plugin(Subagents);
@@ -243,6 +248,9 @@ export class ProactiveRuntime {
         );
         ctx.on("agent/status", ({ agent, status }) =>
           bridge.emit({ kind: "agent.status", sessionId: agent.id, status }),
+        );
+        ctx.on("agent/disposed", ({ agent }) =>
+          bridge.emit({ kind: "agent.disposed", sessionId: agent.id }),
         );
         bridge.registerTools(ctx, !!modelConfig);
       },
@@ -469,15 +477,23 @@ export class ProactiveRuntime {
       task.status === "cancelling"
     )
       throw new Error("task_unavailable");
-    task.revision++;
+    const previous = { revision: task.revision, target: task.target };
+    const revision = previous.revision + 1;
+    task.revision = revision;
     task.target = target;
-    const messageId = await this.ctx.subagents.sendMessage(
-      this.owner.agent,
-      SessionId(task.childId),
-      text({ scenario: "revise", taskId, revision: task.revision, target }),
-      { signal: new AbortController().signal },
-    );
-    return { messageId, ...task };
+    try {
+      const messageId = await this.ctx.subagents.sendMessage(
+        this.owner.agent,
+        SessionId(task.childId),
+        text({ scenario: "revise", taskId, revision, target }),
+        { signal: new AbortController().signal },
+      );
+      return { messageId, ...task };
+    } catch (error) {
+      // 未入队的修正不得悄悄提高业务版本；不覆盖可能已接受的更新修正。
+      if (task.revision === revision) Object.assign(task, previous);
+      throw error;
+    }
   }
   async cancel(taskId: string) {
     const task = this.tasks.get(taskId);
