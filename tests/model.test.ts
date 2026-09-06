@@ -257,7 +257,9 @@ test("日志标签区分运行时上下文、用户输入、工具结果和未�
   expect(rows.map((row) => row.label)).toEqual([
     "运行时上下文",
     "用户输入",
+    "工具意图 · controlled_delay",
     "工具结果 · controlled_delay",
+    "工具意图 · calendar_update",
     "提案 · 未执行",
   ]);
 });

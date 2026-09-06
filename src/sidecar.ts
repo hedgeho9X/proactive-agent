@@ -14,7 +14,7 @@ const ready = new Promise<unknown>((resolve, reject) => {
       reject(new Error("bootstrap_required"));
       return;
     }
-    const { modelConfig, allowedReadRoot } = raw.bootstrap;
+    const { modelConfig, subagentConfig, allowedReadRoot } = raw.bootstrap;
     runtime = new ProactiveRuntime(
       root,
       (event) => process.send?.({ event }),
@@ -35,7 +35,11 @@ const ready = new Promise<unknown>((resolve, reject) => {
     );
     try {
       resolve(
-        await runtime.start(process.argv.includes("--resume"), modelConfig),
+        await runtime.start(
+          process.argv.includes("--resume"),
+          modelConfig,
+          subagentConfig,
+        ),
       );
     } catch (error) {
       reject(error);

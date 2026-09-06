@@ -1,3 +1,5 @@
+import { completion } from "./openai.ts";
+import type { RoleModelConfig } from "./config.ts";
 import { GoogleGenAI } from "@google/genai";
 import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
@@ -99,24 +101,31 @@ export function inputManifest(input: UnderstandingInput, model: string) {
 }
 // 缓存包含动作、证据状态、AX/OCR内容与图像hash，不能只用截图判断相同上下文。
 export class UnderstandingService {
+  private controller = new AbortController();
+  abort() {
+    this.controller.abort();
+  }
   private active = new Map<string, Promise<unknown>>();
-  private recent: number[] = [];
+
   constructor(
     private cacheDir: string,
     private emit: (event: Record<string, unknown>) => void,
   ) {}
   async summarize(input: UnderstandingInput, config: ModelConfig) {
     input = projectUnderstanding(input);
-    const { manifest, hash } = inputManifest(input, config.model);
+    const { manifest, hash } = inputManifest(
+      input,
+      JSON.stringify({
+        protocol: config.protocol ?? "gemini",
+        baseUrl: config.baseUrl ?? "https://generativelanguage.googleapis.com",
+        model: config.model,
+      }),
+    );
     const cached = await readFile(join(this.cacheDir, hash + ".json"), "utf8")
       .then(JSON.parse)
       .catch(() => null);
     if (cached) return { ...cached, cached: true };
     if (this.active.has(hash)) return this.active.get(hash)!;
-    this.recent = this.recent.filter((t) => Date.now() - t < 60_000);
-    if (this.recent.length >= 6)
-      throw new Error("understanding_rate_limit_6_per_minute");
-    this.recent.push(Date.now());
     const work = this.run(input, config, manifest, hash);
     this.active.set(hash, work);
     try {
@@ -160,19 +169,64 @@ export class UnderstandingService {
       input_manifest_hash: hash,
     });
     try {
-      const response = await new GoogleGenAI({
-        apiKey: config.apiKey,
-      }).models.generateContent({
-        model: config.model,
-        contents: [{ role: "user", parts }],
-        config: {
-          systemInstruction: prompt,
-          responseMimeType: "application/json",
-          responseJsonSchema: understandingSchema,
-          maxOutputTokens: 1024,
-          abortSignal: AbortSignal.timeout(30_000),
-        },
-      });
+      let response: any;
+      if (config.protocol === "openai-compatible") {
+        const content: any[] = [{ type: "text", text: parts[0].text }];
+        if (screenshot?.bytes)
+          content.push({
+            type: "image_url",
+            image_url: { url: "data:image/png;base64," + screenshot.bytes },
+          });
+        const raw = await (
+          await completion(
+            config as RoleModelConfig,
+            {
+              messages: [
+                { role: "system", content: prompt },
+                { role: "user", content },
+              ],
+              response_format: {
+                type: "json_schema",
+                json_schema: {
+                  name: "screen_understanding",
+                  strict: true,
+                  schema: understandingSchema,
+                },
+              },
+              max_tokens: 1024,
+            },
+            AbortSignal.any([
+              this.controller.signal,
+              AbortSignal.timeout(30000),
+            ]),
+          )
+        ).json();
+        response = {
+          text: raw.choices?.[0]?.message?.content,
+          usageMetadata: {
+            promptTokenCount: raw.usage?.prompt_tokens,
+            candidatesTokenCount: raw.usage?.completion_tokens,
+            totalTokenCount: raw.usage?.total_tokens,
+          },
+        };
+      } else
+        response = await new GoogleGenAI({
+          apiKey: config.apiKey,
+          httpOptions: config.baseUrl ? { baseUrl: config.baseUrl } : undefined,
+        }).models.generateContent({
+          model: config.model,
+          contents: [{ role: "user", parts }],
+          config: {
+            systemInstruction: prompt,
+            responseMimeType: "application/json",
+            responseJsonSchema: understandingSchema,
+            maxOutputTokens: 1024,
+            abortSignal: AbortSignal.any([
+              this.controller.signal,
+              AbortSignal.timeout(30_000),
+            ]),
+          },
+        });
       const result = JSON.parse(response.text ?? "");
       if (
         validateJsonSchemaValue(understandingSchema, result).length ||
@@ -184,6 +238,12 @@ export class UnderstandingService {
         throw new Error("invalid_understanding");
       const record = {
         result,
+        model_role: "understanding",
+        model_config: {
+          protocol: config.protocol ?? "gemini",
+          baseUrl: config.baseUrl,
+          model: config.model,
+        },
         input_manifest_hash: hash,
         manifest,
         model: config.model,

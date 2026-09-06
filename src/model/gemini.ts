@@ -10,6 +10,8 @@ import {
 import type { Context } from "@deepseek-ai/cordis";
 
 export interface ModelConfig {
+  baseUrl?: string;
+  protocol?: "gemini" | "openai-compatible";
   apiKey: string;
   model: string;
   maxCalls?: number;
@@ -36,6 +38,7 @@ export function usageOf(usage: any): ModelUsage {
 }
 export function publicModelError(error: unknown) {
   const value = error as { status?: number; name?: string; message?: string };
+  if (/^openai_http_\d+$/.test(value.message ?? "")) return value.message!;
   if (
     [
       "invalid_understanding",
@@ -59,7 +62,10 @@ export class GeminiAdapter extends LlmAdapter {
     private emit: (event: Record<string, unknown>) => void,
   ) {
     super();
-    this.client = new GoogleGenAI({ apiKey: config.apiKey });
+    this.client = new GoogleGenAI({
+      apiKey: config.apiKey,
+      httpOptions: config.baseUrl ? { baseUrl: config.baseUrl } : undefined,
+    });
   }
   async contents(messages: Message[]): Promise<Content[]> {
     const calls = new Map<string, ToolCallBlock>();
@@ -164,7 +170,9 @@ export class GeminiAdapter extends LlmAdapter {
               ]
             : undefined,
           maxOutputTokens: Math.min(options.maxTokens ?? 2048, 4096),
-          abortSignal: options.signal,
+          abortSignal: options.signal
+            ? AbortSignal.any([options.signal, AbortSignal.timeout(30000)])
+            : AbortSignal.timeout(30000),
         },
       });
       for await (const response of stream) {
@@ -209,6 +217,7 @@ export class GeminiAdapter extends LlmAdapter {
         }
       }
       if (!index) throw new Error("empty_model_response");
+      this.emit({ kind: "model.completed" });
       const counts = usageOf(usage);
       this.emit({
         kind: "model.usage",

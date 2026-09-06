@@ -25,6 +25,7 @@ export class RuntimeHost extends EventEmitter {
       execPath = process.env.PROACTIVE_NODE ?? "node",
       electronNode = false,
       modelConfig,
+      subagentConfig,
       allowedReadRoot,
       readObservation,
     }: {
@@ -34,6 +35,7 @@ export class RuntimeHost extends EventEmitter {
       execPath?: string;
       electronNode?: boolean;
       modelConfig?: ModelConfig;
+      subagentConfig?: ModelConfig;
       allowedReadRoot?: string;
       readObservation?: (id: string) => Promise<unknown>;
     } = {},
@@ -50,7 +52,9 @@ export class RuntimeHost extends EventEmitter {
       },
     });
     this.child.once("spawn", () =>
-      this.child.send({ bootstrap: { modelConfig, allowedReadRoot } }),
+      this.child.send({
+        bootstrap: { modelConfig, subagentConfig, allowedReadRoot },
+      }),
     );
     this.child.on("message", async (raw: any) => {
       if (!raw.toolRequest) return;

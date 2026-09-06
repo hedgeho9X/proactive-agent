@@ -1,3 +1,5 @@
+import { OpenAIAdapter } from "./model/openai.ts";
+import type { RoleModelConfig } from "./model/config.ts";
 import SessionQuery from "@deepseek-ai/dsh-session-query-sqlite";
 import { GeminiAdapter, type ModelConfig } from "./model/gemini.ts";
 import {
@@ -184,7 +186,11 @@ export class ProactiveRuntime {
     readonly delayMs = 20_000,
     private capabilities: RuntimeCapabilities = {},
   ) {}
-  async start(resume = false, modelConfig?: ModelConfig) {
+  async start(
+    resume = false,
+    modelConfig?: ModelConfig,
+    subagentConfig?: ModelConfig,
+  ) {
     await mkdir(this.root, { recursive: true });
     for (const plugin of [Llm, Sessions, Agents, Tools, Prompt, Projections])
       await this.ctx.plugin(plugin);
@@ -206,12 +212,24 @@ export class ProactiveRuntime {
       name: "proactive-bridge",
       inject: ["llm", "tools", "subagents", "attachments", "systemPrompt"],
       apply(ctx: Context) {
-        if (modelConfig)
-          ctx.llm.registerAdapter(
-            ["gemini"],
-            new GeminiAdapter(modelConfig, ctx, bridge.emit),
-          );
-        else
+        if (modelConfig) {
+          const install = (
+            provider: string,
+            config: ModelConfig,
+            role: string,
+          ) => {
+            const notify = (event: any) => bridge.emit({ ...event, role });
+            ctx.llm.registerAdapter(
+              [provider],
+              config.protocol === "openai-compatible"
+                ? new OpenAIAdapter(config as RoleModelConfig, ctx, notify)
+                : new GeminiAdapter(config, ctx, notify),
+            );
+          };
+          install("main-role", modelConfig, "main");
+          if (subagentConfig)
+            install("subagent-role", subagentConfig, "subagent");
+        } else
           ctx.llm.registerAdapter(
             ["fixture"],
             new FixtureAdapter(bridge.emit, ctx),
@@ -252,11 +270,11 @@ export class ProactiveRuntime {
         ctx.on("agent/disposed", ({ agent }) =>
           bridge.emit({ kind: "agent.disposed", sessionId: agent.id }),
         );
-        bridge.registerTools(ctx, !!modelConfig);
+        bridge.registerTools(ctx, !!modelConfig, subagentConfig);
       },
     });
     const agentOptions = modelConfig
-      ? { provider: "gemini", model: modelConfig.model, maxTokens: 2048 }
+      ? { provider: "main-role", model: modelConfig.model, maxTokens: 2048 }
       : { provider: "fixture", model: "deterministic-v1" };
     this.owner = resume
       ? await this.ctx.agents.resume({
@@ -274,7 +292,11 @@ export class ProactiveRuntime {
       liveModel: modelConfig ? "configured_unverified" : "unavailable",
     };
   }
-  private registerTools(ctx: Context, live = false) {
+  private registerTools(
+    ctx: Context,
+    live = false,
+    subagentConfig?: ModelConfig,
+  ) {
     const register = (
       name: string,
       parameters: ToolDefinition["parameters"],
@@ -304,6 +326,8 @@ export class ProactiveRuntime {
       async (raw, exec) => {
         const args = raw as { taskId: string; target: string; prompt?: string };
         if (!exec.agent) throw new Error("missing_agent");
+        if (live && !subagentConfig)
+          throw new Error("subagent_model_unavailable");
         if (this.tasks.has(args.taskId)) throw new Error("duplicate_task");
         const task: Task = {
           taskId: args.taskId,
@@ -317,6 +341,15 @@ export class ProactiveRuntime {
           label: args.taskId,
           request: {
             parent: exec.agent,
+            ...(live
+              ? {
+                  agentOptions: {
+                    provider: "subagent-role",
+                    model: subagentConfig!.model,
+                    maxTokens: 2048,
+                  },
+                }
+              : {}),
             prompt: text({
               scenario: args.prompt ? "delegated_task" : "work",
               instruction: args.prompt

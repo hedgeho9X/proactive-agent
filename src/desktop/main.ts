@@ -1,3 +1,6 @@
+import { ModelRoles, type ModelRole } from "../model/config.ts";
+import { ActionQueue } from "../model/queue.ts";
+import { DatabaseSync } from "node:sqlite";
 import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import { join, resolve } from "node:path";
 import {
@@ -28,7 +31,9 @@ let window: BrowserWindow | undefined;
 let store: EvidenceStore;
 let collector: NativeCollectorHost;
 let runtime: RuntimeHost | undefined;
-let config: ModelConfig | undefined;
+let runtimeReady = false;
+let modelRoles: ModelRoles;
+let queue: ActionQueue;
 let mode = "unavailable";
 let connection = "unavailable";
 let allowedReadRoot: string | undefined;
@@ -37,14 +42,24 @@ let shuttingDown = false;
 const events: any[] = [];
 const understandings = new Map<string, unknown>();
 let sequence = 0;
-let autoTimer: ReturnType<typeof setTimeout> | undefined;
-let autoBusy = false;
-let lastAutoAction = "";
-const autoProcessed = new Set<string>();
+function notify() {
+  if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
+    window.webContents.send("proactive:event");
+}
 function emit(event: any) {
   if (event.event?.type === "assistant/message") {
     event = structuredClone(event);
     delete event.event.data.message.source.replayState;
+  }
+  if (event.role && modelRoles) {
+    modelRoles.status[event.role as ModelRole] = [
+      "model.usage",
+      "model.completed",
+    ].includes(event.kind)
+      ? "connected"
+      : event.kind === "model.error"
+        ? "last_request_failed"
+        : modelRoles.status[event.role as ModelRole];
   }
   if (event.kind === "model.usage" || event.kind === "understanding.completed")
     connection = "connected";
@@ -52,7 +67,7 @@ function emit(event: any) {
     connection = "last_request_failed";
   events.push({ ...event, id: ++sequence, at: new Date().toISOString() });
   if (events.length > 1000) events.splice(0, events.length - 1000);
-  window?.webContents.send("proactive:event");
+  notify();
 }
 function observation(actionId: string) {
   const item = store.getObservation(actionId);
@@ -66,19 +81,36 @@ function observation(actionId: string) {
   return {
     ...item,
     artifacts,
-    understanding: understandings.get(actionId) ?? null,
+    understanding:
+      understandings.get(actionId) ?? queue?.result(actionId) ?? null,
   };
 }
 function snapshot() {
   return {
-    actions: store.listActions(200),
+    actions: store.listActions(200).map((item) => {
+      const record =
+        understandings.get(item.action.action_id) ??
+        queue.result(item.action.action_id);
+      return {
+        ...item,
+        understanding: record
+          ? {
+              result: (record as any).result,
+              model: (record as any).model,
+              created_at: (record as any).created_at,
+            }
+          : null,
+      };
+    }),
     activities: store.listActivities(100),
     collector: collector.status(),
     events,
     mode,
     connection,
-    model: config?.model ?? null,
-    hasKey: !!config?.apiKey && mode === "gemini",
+    model: modelRoles.get("main")?.model ?? null,
+    hasKey: !!modelRoles.get("understanding"),
+    modelRoles: modelRoles.snapshot(),
+    queue: queue.list(),
     allowedReadRoot,
     autoUnderstand,
     dataDir: app.getPath("userData"),
@@ -86,63 +118,35 @@ function snapshot() {
 }
 let understanding: UnderstandingService;
 async function summarize(actionId: string, view: "raw" | "context") {
-  if (!config || mode !== "gemini") throw new Error("model_unavailable");
+  const config = modelRoles.get("understanding");
+  if (!config) throw new Error("understanding_model_unavailable");
   const item = observation(actionId);
-  const input: UnderstandingInput = {
-    action: item.action as unknown as Record<string, unknown>,
-    revision: item.revision,
-    evidence: item.evidence,
-    artifacts: item.artifacts,
-    view,
-  };
-  const result = await understanding.summarize(input, config);
+  const result = await understanding.summarize(
+    {
+      action: item.action as unknown as Record<string, unknown>,
+      revision: item.revision,
+      evidence: item.evidence,
+      artifacts: item.artifacts,
+      view,
+    },
+    config,
+  );
   understandings.set(actionId, result);
-  emit({
-    kind: "understanding.available",
-    actionId,
-    cached: (result as any).cached,
-  });
-  if (runtime && mode === "gemini")
-    await runtime.request("observe", {
-      actionId: actionId + ":understanding:" + view + ":" + item.revision,
-      value: {
-        observation: item.action,
-        understanding: (result as any).result,
-        evidence_action_id: actionId,
-      },
-    });
   return result;
 }
-function scheduleUnderstanding() {
-  if (!autoUnderstand || !config || autoBusy) return;
-  if (autoTimer) return;
-  autoTimer = setTimeout(async () => {
-    autoTimer = undefined;
-    const candidate = store
-      .listActions(20)
-      .find(
-        (o) =>
-          (!["key_down", "key_up"].includes(o.action.kind) ||
-            o.action.input?.key_category === "special") &&
-          o.evidence.every((e) => e.status !== "pending") &&
-          !autoProcessed.has(o.action.action_id) &&
-          o.action.policy_status !== "excluded",
-      );
-    if (!candidate) return;
-    lastAutoAction = candidate.action.action_id;
-    autoProcessed.add(lastAutoAction);
-    autoBusy = true;
-    try {
-      await summarize(lastAutoAction, "context");
-    } catch (error) {
-      emit({ kind: "error", message: String(error) });
-    } finally {
-      autoBusy = false;
-      scheduleUnderstanding();
-    }
-  }, 1500);
+function admit(action: any) {
+  const reason =
+    action.policy_status === "excluded"
+      ? "excluded_by_capture_policy"
+      : ["key_down", "key_up"].includes(action.kind) &&
+          action.input?.key_category !== "special"
+        ? "ordinary_typing_filtered"
+        : undefined;
+  queue.enqueue(action.action_id, reason);
 }
 async function startRuntime(fixture: boolean) {
+  runtimeReady = false;
+  mode = "transitioning";
   if (runtime) {
     await runtime.close();
     const known = new Map<string, any>();
@@ -157,6 +161,7 @@ async function startRuntime(fixture: boolean) {
           reason: "runtime_restarted",
         });
   }
+  const config = modelRoles.get("main");
   if (fixture) autoUnderstand = false;
   mode = fixture ? "deterministic_fixture" : config ? "gemini" : "unavailable";
   if (mode === "unavailable") throw new Error("model_unavailable");
@@ -173,6 +178,7 @@ async function startRuntime(fixture: boolean) {
     execPath: process.execPath,
     electronNode: true,
     modelConfig: fixture ? undefined : config,
+    subagentConfig: fixture ? undefined : modelRoles.get("subagent"),
     allowedReadRoot,
     readObservation: async (id) => {
       const item = observation(id);
@@ -192,29 +198,61 @@ async function startRuntime(fixture: boolean) {
     emit({ kind: "runtime.diagnostic", message }),
   );
   await runtime.ready;
+  runtimeReady = true;
+  runtime.child.once("exit", () => {
+    runtimeReady = false;
+    notify();
+  });
   await writeFile(marker, JSON.stringify({ mode }));
   for (const row of await runtime.request("events"))
     emit({ kind: "session.event", ...row, replayed: true, runtimeMode: mode });
   emit({ kind: "runtime.ready", mode, restored_tasks: "not_reconstructed" });
+  void queue?.drain();
 }
 async function closeAll() {
   if (shuttingDown) return;
   shuttingDown = true;
-  clearTimeout(autoTimer);
-  await collector?.stop();
-  await runtime?.close();
-  store?.close();
+  runtimeReady = false;
+  understanding?.abort();
+  try {
+    await collector?.stop();
+  } finally {
+    try {
+      await queue?.close();
+    } finally {
+      try {
+        await runtime?.close();
+      } finally {
+        store?.close();
+      }
+    }
+  }
 }
 app.on("before-quit", (event) => {
   if (!shuttingDown) {
     event.preventDefault();
-    void closeAll().finally(() => app.quit());
+    const deadline = setTimeout(() => app.exit(1), 35000);
+    void closeAll()
+      .catch((error) =>
+        console.error(
+          "shutdown_failed",
+          error instanceof Error ? error.message : "unknown",
+        ),
+      )
+      .finally(() => {
+        clearTimeout(deadline);
+        app.quit();
+      });
   }
 });
 // ESM导入完成前Electron不会ready，不能在模块顶层等待whenReady。
 async function bootstrap() {
   console.error("[proactive] bootstrap:ready");
   await mkdir(app.getPath("userData"), { recursive: true });
+  modelRoles = new ModelRoles(
+    join(app.getPath("userData"), "model-roles.json"),
+  );
+  await modelRoles.load();
   store = new EvidenceStore(
     join(app.getPath("userData"), "observations.sqlite"),
   );
@@ -224,12 +262,51 @@ async function bootstrap() {
     onEvent: (event: any) => {
       if (["status", "permissions", "error"].includes(event.type))
         emit({ kind: "collector." + event.type, ...event });
-      window?.webContents.send("proactive:event");
-      scheduleUnderstanding();
+      notify();
+      if (event.type === "action") admit(event.action);
+      else if (event.type === "artifact") void queue.drain();
     },
   });
   const cacheDir = join(app.getPath("userData"), "understanding");
-  understanding = new UnderstandingService(cacheDir, emit);
+  understanding = new UnderstandingService(cacheDir, (event) => {
+    modelRoles.status.understanding =
+      event.kind === "understanding.failed"
+        ? "last_request_failed"
+        : event.kind === "understanding.completed"
+          ? "connected"
+          : modelRoles.status.understanding;
+    emit(event);
+  });
+  queue = new ActionQueue(
+    join(app.getPath("userData"), "action-queue.sqlite"),
+    {
+      read: observation,
+      canUnderstand: () =>
+        !!modelRoles.get("understanding") && mode !== "deterministic_fixture",
+      canDeliver: () => runtimeReady && !!runtime && mode === "gemini",
+      understand: (item) => summarize(item.action.action_id, "context"),
+      deliver: async (actionId, result) =>
+        runtime!.request("observe", {
+          actionId: "understood:" + actionId,
+          value: {
+            evidence_action_id: actionId,
+            understanding: result.result,
+            input_manifest_hash: result.input_manifest_hash,
+          },
+        }),
+      change: notify,
+    },
+  );
+  // 从本应用SQLite原始action账本重建缺失队列项，不受UI最近200条限制。
+  const ledger = new DatabaseSync(
+    join(app.getPath("userData"), "observations.sqlite"),
+    { readOnly: true },
+  );
+  for (const row of ledger
+    .prepare("SELECT metadata FROM actions ORDER BY rowid")
+    .all())
+    admit(JSON.parse(String(row.metadata)));
+  ledger.close();
   async function pruneCache() {
     if (!existsSync(cacheDir)) return;
     for (const name of await readdir(cacheDir)) {
@@ -269,6 +346,8 @@ async function bootstrap() {
         });
       }
     }
+  const queueTick = setInterval(() => void queue.drain(), 1000);
+  queueTick.unref();
   const cleanup = setInterval(() => {
     store.prune();
     void pruneCache();
@@ -297,13 +376,28 @@ async function bootstrap() {
           await collector.stop();
           return snapshot();
         case "config": {
-          if (!p.apiKey || !/^gemini-[a-zA-Z0-9.\-]+$/.test(p.model))
-            throw new Error("invalid_model_config");
-          config = { apiKey: String(p.apiKey), model: p.model, maxCalls: 30 };
-          connection = "configured_unverified";
-          await startRuntime(false);
-          return { mode, model: config.model };
+          const role = p.role as ModelRole;
+          await modelRoles.update(role, p.config ?? {});
+          if (role === "main" || role === "subagent") {
+            if (modelRoles.get("main")) await startRuntime(false);
+            else {
+              await runtime?.close();
+              runtime = undefined;
+              mode = "unavailable";
+            }
+          }
+          if (role === "understanding" && mode === "deterministic_fixture") {
+            await runtime?.close();
+            runtime = undefined;
+            mode = "unavailable";
+            if (modelRoles.get("main")) await startRuntime(false);
+          }
+          void queue.drain();
+          return { modelRoles: modelRoles.snapshot(), mode };
         }
+        case "retry":
+          queue.retry(String(p.actionId));
+          return { queue: queue.list() };
         case "fixture":
           await startRuntime(true);
           await runtime!.request("observe", {
@@ -346,9 +440,10 @@ async function bootstrap() {
             p.view === "raw" ? "raw" : "context",
           );
         case "auto":
-          autoUnderstand = !!p.enabled;
-          scheduleUnderstanding();
-          return { autoUnderstand };
+          return {
+            autoUnderstand: true,
+            reason: "each_eligible_action_is_queued",
+          };
         case "readRoot": {
           const choice = await dialog.showOpenDialog({
             properties: ["openDirectory"],
