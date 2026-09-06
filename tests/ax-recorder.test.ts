@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { AXHistory } from "../src/observation/ax-history.ts";
 import { AXRecorder } from "../src/observation/ax-recorder.ts";
 
-test("键盘/点击每条落盘，忙时不积压截图，松开只保留事件", async () => {
+test("只记录按下和点击，忙时保留原因，松开不再生成空快照", async () => {
   const dir = await mkdtemp(join(tmpdir(), "ax-recorder-test-"));
   const history = new AXHistory(dir, async () => {});
   let finish!: (v: any) => void;
@@ -40,7 +40,7 @@ test("键盘/点击每条落盘，忙时不积压截图，松开只保留事件"
     await recorder.accept(click);
     await recorder.accept(up);
     expect((await history.get(click.id)).captureStatus).toBe("skipped_busy");
-    expect((await history.get(up.id)).captureStatus).toBe("event_only");
+    await expect(history.get(up.id)).rejects.toThrow();
     finish({
       pid: 123,
       app: "fixture",
@@ -50,7 +50,7 @@ test("键盘/点击每条落盘，忙时不积压截图，松开只保留事件"
     });
     await job;
     expect(calls).toBe(1);
-    expect((await history.list()).length).toBe(3);
+    expect((await history.list()).length).toBe(2);
     expect(await history.get(enter.id)).toMatchObject({
       captureStatus: "captured",
       trigger: { key: "Enter" },

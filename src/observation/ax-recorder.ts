@@ -24,11 +24,9 @@ export class AXRecorder {
     )
       throw new Error("invalid_input_event");
     const captures = ["click", "key_down"].includes(event.kind);
-    const captureStatus = !captures
-      ? "event_only"
-      : this.captureBusy
-        ? "skipped_busy"
-        : "pending";
+    // 防御旧监听协议，松开及修饰键不再生成空快照记录。
+    if (!captures) return;
+    const captureStatus = this.captureBusy ? "skipped_busy" : "pending";
     if (captureStatus === "pending") this.captureBusy = true;
     try {
       await this.history.save(

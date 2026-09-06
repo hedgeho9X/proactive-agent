@@ -9,7 +9,7 @@ final class InputWatch {
     var sequence = 0
     func start() {
         guard CGPreflightListenEventAccess() else { emit(["type":"watch_error","reason":"input_monitoring_required"]); exit(1) }
-        let types: [CGEventType] = [.keyDown,.keyUp,.flagsChanged,.leftMouseUp,.rightMouseUp,.otherMouseUp]
+        let types: [CGEventType] = [.keyDown,.leftMouseUp,.rightMouseUp,.otherMouseUp]
         let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
         tap = CGEvent.tapCreate(tap:.cgSessionEventTap,place:.headInsertEventTap,options:.listenOnly,eventsOfInterest:mask,callback:{ _,type,event,info in
             if let info { Unmanaged<InputWatch>.fromOpaque(info).takeUnretainedValue().receive(type,event) }

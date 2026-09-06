@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { attributeText, diffAX } from "./ax-diff.ts";
 import { Button } from "@/components/ui/button";
 import { AXDiffView } from "./ax-diff-view.tsx";
+import { hasAXEvidence, eventOrder } from "../observation/ax-history-view.ts";
 
 // 历史快照由主进程持久化；面板仅加载当前快照和对比基线。
 export function AXLab() {
@@ -20,6 +21,8 @@ export function AXLab() {
   });
   const [eventFilter, setEventFilter] = useState("");
   const [history, setHistory] = useState<any[]>([]);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [baselineMissing, setBaselineMissing] = useState(0);
   const [notice, setNotice] = useState("");
   // 先打开事件、后完成采集时自动回填当前详情，不要求用户切换历史项。
   useEffect(() => {
@@ -28,8 +31,11 @@ export function AXLab() {
     const id = snapshot.snapshotId;
     const timer = setInterval(async () => {
       try {
-        const value = await window.proactive.invoke("ax.load", { id });
+        const pair = await window.proactive.invoke("ax.loadPair", { id });
+        const value = pair.current;
         if (cancelled) return;
+        setBefore(pair.previous);
+        setBaselineMissing(pair.missing);
         setSnapshot((current: any) =>
           current?.snapshotId === id ? value : current,
         );
@@ -45,10 +51,18 @@ export function AXLab() {
       clearInterval(timer);
     };
   }, [snapshot?.snapshotId, snapshot?.captureStatus]);
-  const refreshHistory = async () =>
-    setHistory(await window.proactive.invoke("ax.history"));
+  const refreshHistory = async () => {
+    const rows = (await window.proactive.invoke("ax.history")).sort(eventOrder);
+    setHistory(rows);
+    return rows;
+  };
   useEffect(() => {
-    void refreshHistory().catch(() => setError("无法读取快照历史"));
+    void refreshHistory()
+      .then((rows) => {
+        const latest = rows.find(hasAXEvidence);
+        if (latest) void load(latest.id).catch(() => {});
+      })
+      .catch(() => setError("无法读取快照历史"));
     let cancelled = false;
     let polling = false;
     const tick = async () => {
@@ -72,7 +86,7 @@ export function AXLab() {
       clearInterval(timer);
     };
   }, []);
-  const manage = async (work: () => Promise<void>) => {
+  const manage = async (work: () => Promise<unknown>) => {
     setBusy(true);
     setError("");
     setNotice("");
@@ -85,13 +99,17 @@ export function AXLab() {
       setBusy(false);
     }
   };
-  const load = async (id: string, baseline = false) => {
-    const value = await window.proactive.invoke("ax.load", { id });
-    if (baseline) setBefore(value);
-    else {
-      setSnapshot(value);
-      setSelected(value.focusId ?? value.nodes[0]?.id ?? "");
-    }
+  const load = async (id: string) => {
+    const pair = await window.proactive.invoke("ax.loadPair", { id });
+    const value = pair.current;
+    setBefore(pair.previous);
+    setBaselineMissing(pair.missing);
+    setSnapshot(value);
+    setSelected(
+      value.nodes.some((node: any) => node.id === value.focusId)
+        ? value.focusId
+        : (value.nodes[0]?.id ?? ""),
+    );
   };
   const capture = async () => {
     setBusy(true);
@@ -102,9 +120,7 @@ export function AXLab() {
         pid: Number(pid),
       });
       if (result.error) throw new Error(result.error);
-      setBefore(snapshot);
-      setSnapshot(result);
-      setSelected(result.focusId ?? result.nodes[0]?.id ?? "");
+      await load(result.snapshotId);
       await refreshHistory();
       setNotice("快照已保存到本地");
     } catch {
@@ -116,6 +132,9 @@ export function AXLab() {
     }
   };
   const node = snapshot?.nodes.find((item: any) => item.id === selected);
+  const visibleHistory = history.filter(
+    (item) => showDiagnostics || hasAXEvidence(item),
+  );
   const differences = diffAX(before, snapshot);
   const eventLabel = (item: any) =>
     [item.trigger?.kind, ...(item.trigger?.modifiers ?? []), item.trigger?.key]
@@ -151,7 +170,7 @@ export function AXLab() {
             {recording.state} · 本轮 {recording.count} 条 {recording.reason}
           </span>
           <span className="text-xs text-muted-foreground">
-            跟随前台应用，排除自身；记录点击、各类按键及修饰键。无倒计时，不记录滚动。
+            跟随前台应用，排除自身；每次点击或按键按下只记一条，组合键附带修饰键。无倒计时，不记录滚动。
           </span>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -237,7 +256,18 @@ export function AXLab() {
           </Button>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
-          <span>历史 {history.length} 条</span>
+          <span>
+            有证据 {history.filter(hasAXEvidence).length} 条 / 全部{" "}
+            {history.length} 条
+          </span>
+          <label className="flex items-center gap-1 text-xs">
+            <input
+              type="checkbox"
+              checked={showDiagnostics}
+              onChange={(e) => setShowDiagnostics(e.target.checked)}
+            />
+            包含未采集／旧按键事件（诊断）
+          </label>
           <select
             aria-label="历史快照"
             className="max-w-96 rounded border bg-background p-2 text-xs"
@@ -249,31 +279,16 @@ export function AXLab() {
             }}
           >
             <option value="">选择已保存快照</option>
-            {history.map((item) => (
+            {visibleHistory.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.trigger?.occurredAt ?? item.capturedAt} · {item.app} ·{" "}
                 {eventLabel(item)} · {item.captureStatus ?? "手动"} · {item.id}
               </option>
             ))}
           </select>
-          <select
-            aria-label="对比基线"
-            className="max-w-80 rounded border bg-background p-2 text-xs"
-            disabled={busy}
-            value={before?.snapshotId ?? ""}
-            onChange={(event) => {
-              if (event.target.value)
-                void manage(() => load(event.target.value, true));
-              else setBefore(null);
-            }}
-          >
-            <option value="">选择对比基线（可选）</option>
-            {history.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.capturedAt} · {item.app} · {item.id}
-              </option>
-            ))}
-          </select>
+          <span className="text-xs text-muted-foreground">
+            Diff 自动对比同应用上一次有证据事件
+          </span>
           <Button
             size="sm"
             variant="outline"
@@ -348,6 +363,20 @@ export function AXLab() {
           </p>
         )}
       </header>
+      {snapshot && (
+        <div className="border-b px-4 py-2 text-xs text-muted-foreground">
+          当前：{snapshot.trigger?.occurredAt ?? snapshot.capturedAt} ·{" "}
+          {snapshot.app}
+          <br />
+          上次：
+          {before
+            ? `${before.trigger?.occurredAt ?? before.capturedAt} · ${before.app} · ${before.snapshotId}`
+            : "没有更早的同应用有效采集"}
+          {baselineMissing > 0
+            ? `（中间 ${baselineMissing} 条事件未采到证据，已跳过）`
+            : ""}
+        </div>
+      )}
       <details className="shrink-0 border-b px-4 py-2" open={!snapshot}>
         <summary className="text-sm">
           事件记录 / 历史快照（显示最近 200 条）
@@ -360,7 +389,7 @@ export function AXLab() {
           onChange={(e) => setEventFilter(e.target.value)}
         />
         <div className="max-h-44 overflow-auto">
-          {history
+          {visibleHistory
             .filter((item) =>
               (eventLabel(item) + item.app)
                 .toLowerCase()
@@ -385,8 +414,7 @@ export function AXLab() {
       </details>
       {!snapshot ? (
         <div className="p-6 text-sm text-muted-foreground">
-          先刷新应用并选择目标。建议依次测试
-          TextEdit：输入中文、删除、粘贴、全选，然后再测试微信。每次采集会与上一次快照比较。
+          点击“开始事件记录”，切到目标应用操作后返回。默认只显示有节点或截图的记录；可勾选诊断查看采集失败原因。
         </div>
       ) : (
         <div className="grid min-h-0 flex-1 grid-cols-[minmax(220px,30%)_minmax(0,1fr)]">
@@ -512,6 +540,14 @@ export function AXLab() {
                   </pre>
                 </details>
               </>
+            )}
+            {tab === "attributes" && !node && (
+              <p className="rounded border p-4 text-sm">
+                本条没有采集到 AX 节点。状态：
+                {snapshot.captureStatus ?? "unavailable"}{" "}
+                {snapshot.captureError}
+                。这不是一棵空界面的树，请从有证据的事件中查看节点属性。
+              </p>
             )}
             {tab === "diff" && (
               <AXDiffView

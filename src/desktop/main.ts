@@ -14,6 +14,7 @@ import {
 } from "electron";
 import { AXHistory } from "../observation/ax-history.ts";
 import { AXRecorder } from "../observation/ax-recorder.ts";
+import { precedingAXEvent } from "../observation/ax-history-view.ts";
 import { join, resolve } from "node:path";
 import {
   mkdir,
@@ -427,10 +428,29 @@ async function bootstrap() {
           return axRecorder!.stop();
         case "ax.load":
           return axHistory.get(String(p.id));
+        case "ax.loadPair": {
+          const current = await axHistory.get(String(p.id));
+          const { previous, missing } = precedingAXEvent(
+            current,
+            await axHistory.list(),
+          );
+          return {
+            current,
+            previous: previous ? await axHistory.get(previous.id) : null,
+            missing,
+          };
+        }
         case "ax.copy": {
           const item = await axHistory.get(String(p.id));
+          const { previous, missing } = precedingAXEvent(
+            item,
+            await axHistory.list(),
+          );
           clipboard.writeText(
-            `AX 快照 ID：${item.snapshotId}\n本地文件：${item.file}`,
+            `AX 快照 ID：${item.snapshotId}\n本地文件：${item.file}` +
+              (previous
+                ? `\n同应用上次有效事件：${previous.id}\n基线文件：${previous.file}\n中间未采集事件：${missing}`
+                : "\n没有更早的同应用有效采集"),
           );
           return { copied: true };
         }
