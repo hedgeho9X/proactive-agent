@@ -178,7 +178,14 @@ export function projectEvents(events: any[]): StreamRow[] {
         id,
         label,
         kind: "user",
-        text: concise(d.content),
+        // 仅压缩明确来源的系统提示；详情仍通过 base.detail 保留原始事件。
+        text:
+          source.kind === "subagent-settled"
+            ? "子代理本轮已结束"
+            : source.kind === "plugin" &&
+                source.plugin === "@deepseek-ai/dsh-system-prompt"
+              ? "运行时上下文已更新"
+              : concise(d.content),
         status: "已接收",
       });
     }

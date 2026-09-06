@@ -141,3 +141,32 @@ test("同一步live和final只有一行，结果不因迟到chunk退回生成中
   expect(rows[0]?.text).toBe("AB");
   expect(rows[0]?.live).toBe(false);
 });
+
+test("系统提示按准确来源压缩列表文案，原始内容和其他消息保持不变", () => {
+  const content = [
+    {
+      type: "text",
+      text: "Original runtime instructions remain available in the inspector.",
+    },
+  ];
+  const sources = [
+    { kind: "subagent-settled" },
+    { kind: "plugin", plugin: "@deepseek-ai/dsh-system-prompt" },
+    { kind: "user", plugin: "@deepseek-ai/dsh-system-prompt" },
+    { kind: "plugin", plugin: "another-plugin" },
+  ];
+  const input = sources.map((source, index) =>
+    event("user/message", { id: String(index), source, content }, index + 1),
+  );
+  const before = JSON.stringify(input);
+  const rows = projectEvents(input);
+  expect(rows.map((row) => row.text)).toEqual([
+    "子代理本轮已结束",
+    "运行时上下文已更新",
+    content[0]!.text,
+    content[0]!.text,
+  ]);
+  expect(rows[0]!.detail.event.data.content).toEqual(content);
+  expect(rows[1]!.detail.event.data.content).toEqual(content);
+  expect(JSON.stringify(input)).toBe(before);
+});
