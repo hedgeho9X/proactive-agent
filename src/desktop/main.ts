@@ -1,4 +1,5 @@
 import { ModelRoles, type ModelRole } from "../model/config.ts";
+import { testModelConnection } from "../model/connection-test.ts";
 import { ActionQueue } from "../model/queue.ts";
 import { DatabaseSync } from "node:sqlite";
 import { app, BrowserWindow, ipcMain, dialog } from "electron";
@@ -398,6 +399,23 @@ async function bootstrap() {
           }
           void queue.drain();
           return { modelRoles: modelRoles.snapshot(), mode };
+        }
+        case "model.test": {
+          const role = p.role as ModelRole;
+          if (!["understanding", "main", "subagent"].includes(role))
+            throw new Error("invalid_model_role");
+          const config = modelRoles.get(role);
+          const result = await testModelConnection(config);
+          // 配置已变更时不让旧请求覆盖新配置状态。
+          if (JSON.stringify(config) === JSON.stringify(modelRoles.get(role))) {
+            modelRoles.status[role] = result.ok
+              ? "connected"
+              : config
+                ? "last_request_failed"
+                : "unavailable";
+            notify();
+          }
+          return result;
         }
         case "retry":
           queue.retry(String(p.actionId));

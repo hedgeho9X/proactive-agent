@@ -205,9 +205,17 @@ function ModelForm({
     apiKey: "",
   });
   const [saved, setSaved] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState("");
+  const changed =
+    draft.protocol !== config?.protocol ||
+    draft.baseUrl.replace(/\/$/, "") !== config?.baseUrl.replace(/\/$/, "") ||
+    draft.model !== config?.model ||
+    !!draft.apiKey;
   const update = (name: string, value: string) => {
     setDraft((current) => ({ ...current, [name]: value }));
     setSaved(false);
+    setTestResult("");
   };
   return (
     <form
@@ -222,85 +230,120 @@ function ModelForm({
         if (result) {
           setDraft((current) => ({ ...current, apiKey: "" }));
           setSaved(true);
+          setTestResult("");
         }
       }}
     >
-      <FieldGroup className="gap-4">
-        <Field className="gap-2">
-          <FieldLabel htmlFor={role + "-protocol"}>协议</FieldLabel>
-          <Select
-            value={draft.protocol}
-            onValueChange={(value) => update("protocol", value)}
-          >
-            <SelectTrigger id={role + "-protocol"} className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectItem value="openai-compatible">
-                  OpenAI compatible
-                </SelectItem>
-                <SelectItem value="gemini">Gemini</SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </Field>
-        <Field className="gap-2">
-          <FieldLabel htmlFor={role + "-url"}>Base URL</FieldLabel>
-          <Input
-            id={role + "-url"}
-            value={draft.baseUrl}
-            onChange={(e) => update("baseUrl", e.target.value)}
-            placeholder="https://api.example.com/v1"
-            autoComplete="off"
-          />
-        </Field>
-        <Field className="gap-2">
-          <FieldLabel htmlFor={role + "-model"}>Model ID</FieldLabel>
-          <Input
-            id={role + "-model"}
-            value={draft.model}
-            onChange={(e) => update("model", e.target.value)}
-            autoComplete="off"
-          />
-        </Field>
-        <Field className="gap-2">
-          <FieldLabel htmlFor={role + "-key"}>API Key</FieldLabel>
-          <Input
-            id={role + "-key"}
-            type="password"
-            value={draft.apiKey}
-            onChange={(e) => update("apiKey", e.target.value)}
-            placeholder={config?.hasKey ? "已配置 · 留空保留" : "未配置"}
-            autoComplete="off"
-          />
-        </Field>
-        <div className="flex items-center gap-2">
-          <Badge variant="outline">
-            {saved
-              ? "已保存"
-              : config?.hasKey
-                ? statusText(config.status)
-                : "未配置"}
-          </Badge>
-          <span className="flex-1" />
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            disabled={!config?.hasKey || busy}
-            onClick={() => void onSave(role, { ...draft, apiKey: "" })}
-          >
-            清除 Key
-          </Button>
-          <Button
-            size="sm"
-            disabled={busy || !draft.model.trim() || !draft.baseUrl.trim()}
-          >
-            保存
-          </Button>
-        </div>
-      </FieldGroup>
+      <fieldset disabled={testing}>
+        <FieldGroup className="gap-4">
+          <Field className="gap-2">
+            <FieldLabel htmlFor={role + "-protocol"}>协议</FieldLabel>
+            <Select
+              value={draft.protocol}
+              onValueChange={(value) => update("protocol", value)}
+            >
+              <SelectTrigger id={role + "-protocol"} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="openai-compatible">
+                    OpenAI compatible
+                  </SelectItem>
+                  <SelectItem value="gemini">Gemini</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field className="gap-2">
+            <FieldLabel htmlFor={role + "-url"}>Base URL</FieldLabel>
+            <Input
+              id={role + "-url"}
+              value={draft.baseUrl}
+              onChange={(e) => update("baseUrl", e.target.value)}
+              placeholder="https://api.example.com/v1"
+              autoComplete="off"
+            />
+          </Field>
+          <Field className="gap-2">
+            <FieldLabel htmlFor={role + "-model"}>Model ID</FieldLabel>
+            <Input
+              id={role + "-model"}
+              value={draft.model}
+              onChange={(e) => update("model", e.target.value)}
+              autoComplete="off"
+            />
+          </Field>
+          <Field className="gap-2">
+            <FieldLabel htmlFor={role + "-key"}>API Key</FieldLabel>
+            <Input
+              id={role + "-key"}
+              type="password"
+              value={draft.apiKey}
+              onChange={(e) => update("apiKey", e.target.value)}
+              placeholder={config?.hasKey ? "已配置 · 留空保留" : "未配置"}
+              autoComplete="off"
+            />
+          </Field>
+          <div className="flex items-center gap-2">
+            <Badge variant="outline">
+              {saved
+                ? "已保存"
+                : config?.hasKey
+                  ? statusText(config.status)
+                  : "未配置"}
+            </Badge>
+            <span className="flex-1" />
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={busy || testing || changed || !config?.hasKey}
+              onClick={async () => {
+                setTesting(true);
+                setTestResult("");
+                try {
+                  const result = await window.proactive.invoke("model.test", {
+                    role,
+                  });
+                  setTestResult(
+                    result.ok
+                      ? `连接成功 · ${result.elapsedMs} ms`
+                      : `${result.error} · ${result.elapsedMs} ms`,
+                  );
+                } catch {
+                  setTestResult("测试失败，请重试");
+                } finally {
+                  setTesting(false);
+                }
+              }}
+            >
+              {testing ? "测试中…" : "测试连接"}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={!config?.hasKey || busy || testing}
+              onClick={() => void onSave(role, { ...draft, apiKey: "" })}
+            >
+              清除 Key
+            </Button>
+            <Button
+              size="sm"
+              disabled={
+                busy || testing || !draft.model.trim() || !draft.baseUrl.trim()
+              }
+            >
+              保存
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground" role="status">
+            {testResult ||
+              "保存配置后可测试连接：发送一条短文本请求，可能产生少量费用；不验证视觉或工具调用能力。"}
+          </p>
+        </FieldGroup>
+      </fieldset>
     </form>
   );
 }
