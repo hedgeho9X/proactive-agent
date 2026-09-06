@@ -276,16 +276,39 @@ export class ProactiveRuntime {
     const agentOptions = modelConfig
       ? { provider: "main-role", model: modelConfig.model, maxTokens: 2048 }
       : { provider: "fixture", model: "deterministic-v1" };
-    this.owner = resume
-      ? await this.ctx.agents.resume({
+    if (resume) {
+      try {
+        this.owner = await this.ctx.agents.resume({
           resumeSessionId: this.sessionId,
           agentOptions,
-        })
-      : await this.ctx.agents.create({
-          sessionId: this.sessionId,
-          meta: { cwd: process.cwd() },
-          agentOptions,
         });
+      } catch (error) {
+        // 仅恢复会话确实缺失的情况；损坏、权限及其它读取失败继续抛出。
+        if (
+          !(error instanceof Error) ||
+          !String(error).startsWith(
+            'SessionPersistenceNotFoundError: session "proactive-main" not found',
+          )
+        )
+          throw error;
+        this.emit({
+          kind: "runtime.session_missing",
+          sessionId: this.sessionId,
+          recovery: "create_new",
+        });
+      }
+    }
+    if (!this.owner)
+      this.owner = await this.ctx.agents.create({
+        sessionId: this.sessionId,
+        meta: { cwd: process.cwd() },
+        agentOptions,
+      });
+    // ready 之前写入会话，避免只保存配置、尚无消息时留下无会话的启动标记。
+    await this.ctx.sessionPersistence.ensureMaterialized(
+      this.owner.agent.session,
+    );
+    await this.flush();
     return {
       sessionId: this.sessionId,
       mode: modelConfig ? "gemini" : "deterministic_fixture",

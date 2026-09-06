@@ -100,6 +100,8 @@ final class Collector: @unchecked Sendable {
     }
     func record(_ kind: String, input: [String:Any], point: CGPoint?) {
         guard let app = NSWorkspace.shared.frontmostApplication else { return }
+        // 自身窗口操作不进入证据流水，避免拖动和输入在观察界面刷屏。
+        guard app.processIdentifier != getpid(), app.processIdentifier != getppid(), app.bundleIdentifier != "io.github.hedgeho9x.proactive-agent" else { return }
         sequence += 1; let id = UUID().uuidString; let time = iso(); let permitted = !suspended && allows(app)
         emit(["type":"action","action":["schema_version":"1","action_id":id,"capture_session_id":session,"collector_epoch":epoch,"source_sequence":String(sequence),"occurred_at":time,"received_at":time,"monotonic_ns":String(DispatchTime.now().uptimeNanoseconds),"timezone":TimeZone.current.identifier,"kind":kind,"actor":"unknown","origin":"native_observation","trust_class":"untrusted_observation","app":["pid":app.processIdentifier,"bundle_id":app.bundleIdentifier ?? "","name":app.localizedName ?? ""],"input":input,"policy_status":permitted ? "allowed":"excluded","reason_codes":permitted ? []:["app_not_allowlisted"]]])
         if !permitted { emit(["type":"artifact","action_id":id,"kind":"screenshot","slot":"screenshot_before","status":"excluded","capturedAt":time,"reason":"app_not_allowlisted"]) }
