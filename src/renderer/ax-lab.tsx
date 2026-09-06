@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { attributeText, diffAX } from "./ax-diff.ts";
 import { Button } from "@/components/ui/button";
+import { AXDiffView } from "./ax-diff-view.tsx";
 
 // 历史快照由主进程持久化；面板仅加载当前快照和对比基线。
 export function AXLab() {
@@ -13,13 +14,63 @@ export function AXLab() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [tab, setTab] = useState("attributes");
-  const [countdown, setCountdown] = useState(0);
+  const [recording, setRecording] = useState<any>({
+    state: "stopped",
+    count: 0,
+  });
+  const [eventFilter, setEventFilter] = useState("");
   const [history, setHistory] = useState<any[]>([]);
   const [notice, setNotice] = useState("");
+  // 先打开事件、后完成采集时自动回填当前详情，不要求用户切换历史项。
+  useEffect(() => {
+    if (snapshot?.captureStatus !== "pending") return;
+    let cancelled = false;
+    const id = snapshot.snapshotId;
+    const timer = setInterval(async () => {
+      try {
+        const value = await window.proactive.invoke("ax.load", { id });
+        if (cancelled) return;
+        setSnapshot((current: any) =>
+          current?.snapshotId === id ? value : current,
+        );
+        setSelected(
+          (current) => current || value.focusId || value.nodes[0]?.id || "",
+        );
+      } catch {
+        /* 记录可能已被删除，由历史刷新反映。 */
+      }
+    }, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [snapshot?.snapshotId, snapshot?.captureStatus]);
   const refreshHistory = async () =>
     setHistory(await window.proactive.invoke("ax.history"));
   useEffect(() => {
     void refreshHistory().catch(() => setError("无法读取快照历史"));
+    let cancelled = false;
+    let polling = false;
+    const tick = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const status = await window.proactive.invoke("ax.record.status");
+        if (cancelled) return;
+        setRecording(status);
+        if (status.state === "running") await refreshHistory();
+      } catch {
+        if (!cancelled) setError("无法读取记录状态");
+      } finally {
+        polling = false;
+      }
+    };
+    void tick();
+    const timer = setInterval(() => void tick(), 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, []);
   const manage = async (work: () => Promise<void>) => {
     setBusy(true);
@@ -47,12 +98,6 @@ export function AXLab() {
     setError("");
     setNotice("");
     try {
-      // 留出三秒让用户切回目标应用并操作输入框。
-      for (let i = 3; i > 0; i--) {
-        setCountdown(i);
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-      setCountdown(0);
       const result = await window.proactive.invoke("ax.inspect", {
         pid: Number(pid),
       });
@@ -68,11 +113,14 @@ export function AXLab() {
       );
     } finally {
       setBusy(false);
-      setCountdown(0);
     }
   };
   const node = snapshot?.nodes.find((item: any) => item.id === selected);
   const differences = diffAX(before, snapshot);
+  const eventLabel = (item: any) =>
+    [item.trigger?.kind, ...(item.trigger?.modifiers ?? []), item.trigger?.key]
+      .filter(Boolean)
+      .join(" · ");
   return (
     <section
       className="flex h-full min-w-0 flex-1 flex-col overflow-hidden"
@@ -83,6 +131,29 @@ export function AXLab() {
         <p className="mt-1 text-sm text-muted-foreground">
           快照自动保存到本地，不自动上传模型。复制 ID 后可发给 Codex 一起分析。
         </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button
+            disabled={busy}
+            onClick={() =>
+              void manage(async () => {
+                const result = await window.proactive.invoke(
+                  recording.state === "running"
+                    ? "ax.record.stop"
+                    : "ax.record.start",
+                );
+                setRecording(result);
+              })
+            }
+          >
+            {recording.state === "running" ? "停止事件记录" : "开始事件记录"}
+          </Button>
+          <span className="text-sm">
+            {recording.state} · 本轮 {recording.count} 条 {recording.reason}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            跟随前台应用，排除自身；记录点击、各类按键及修饰键。无倒计时，不记录滚动。
+          </span>
+        </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
@@ -118,11 +189,7 @@ export function AXLab() {
             ))}
           </select>
           <Button disabled={!pid || busy} onClick={() => void capture()}>
-            {busy
-              ? countdown
-                ? `${countdown} 秒后采集，请切回目标应用`
-                : "处理中…"
-              : "采集快照（延迟 3 秒）"}
+            {busy ? "处理中…" : "立即采集快照"}
           </Button>
           <Button
             variant="ghost"
@@ -143,7 +210,7 @@ export function AXLab() {
           </Button>
           <Button
             variant="ghost"
-            disabled={busy || !history.length}
+            disabled={busy || !history.length || recording.state === "running"}
             onClick={() =>
               void manage(async () => {
                 const result = await window.proactive.invoke("ax.clear");
@@ -184,7 +251,8 @@ export function AXLab() {
             <option value="">选择已保存快照</option>
             {history.map((item) => (
               <option key={item.id} value={item.id}>
-                {item.capturedAt} · {item.app} · {item.nodes} 节点 · {item.id}
+                {item.trigger?.occurredAt ?? item.capturedAt} · {item.app} ·{" "}
+                {eventLabel(item)} · {item.captureStatus ?? "手动"} · {item.id}
               </option>
             ))}
           </select>
@@ -224,7 +292,12 @@ export function AXLab() {
           <Button
             size="sm"
             variant="ghost"
-            disabled={busy || !snapshot?.snapshotId}
+            disabled={
+              busy ||
+              !snapshot?.snapshotId ||
+              recording.state === "running" ||
+              !!recording.pending
+            }
             onClick={() =>
               void manage(async () => {
                 await window.proactive.invoke("ax.delete", {
@@ -258,11 +331,58 @@ export function AXLab() {
           <p className="mt-2 text-xs text-muted-foreground">
             {snapshot.app} · {snapshot.bundleId} · {snapshot.capturedAt} ·{" "}
             {snapshot.elapsedMs}ms · {snapshot.nodes.length} 节点 ·{" "}
-            {snapshot.partial ? "预算截断，非完整树" : "本次遍历完成"} ·
-            AX窗口状态码 {snapshot.windowCode} · 焦点状态码 {snapshot.focusCode}
+            {snapshot.captureStatus && snapshot.captureStatus !== "captured"
+              ? "事件已记录，未取得完整快照"
+              : snapshot.partial
+                ? "预算截断，非完整树"
+                : "本次遍历完成"}{" "}
+            · AX窗口状态码 {snapshot.windowCode} · 焦点状态码{" "}
+            {snapshot.focusCode}
+          </p>
+        )}
+        {snapshot?.trigger && (
+          <p className="mt-2 text-xs">
+            事件：{eventLabel(snapshot)} · 发生 {snapshot.trigger.occurredAt} ·
+            采集 {snapshot.capturedAt} · 状态 {snapshot.captureStatus}{" "}
+            {snapshot.captureError}。按键名表示物理键，不等于输入法最终文本。
           </p>
         )}
       </header>
+      <details className="shrink-0 border-b px-4 py-2" open={!snapshot}>
+        <summary className="text-sm">
+          事件记录 / 历史快照（显示最近 200 条）
+        </summary>
+        <input
+          aria-label="筛选事件"
+          className="my-2 rounded border p-1 text-xs"
+          placeholder="筛选 Enter、Tab、应用…"
+          value={eventFilter}
+          onChange={(e) => setEventFilter(e.target.value)}
+        />
+        <div className="max-h-44 overflow-auto">
+          {history
+            .filter((item) =>
+              (eventLabel(item) + item.app)
+                .toLowerCase()
+                .includes(eventFilter.toLowerCase()),
+            )
+            .slice(0, 200)
+            .map((item) => (
+              <button
+                key={item.id}
+                disabled={busy}
+                onClick={() => void manage(() => load(item.id))}
+                className="flex w-full gap-3 border-b p-1 text-left text-xs"
+              >
+                <span>{item.trigger?.occurredAt ?? item.capturedAt}</span>
+                <span>{item.app}</span>
+                <span>{eventLabel(item) || "手动快照"}</span>
+                <span>{item.captureStatus ?? "captured"}</span>
+                <span className="ml-auto truncate">{item.id}</span>
+              </button>
+            ))}
+        </div>
+      </details>
       {!snapshot ? (
         <div className="p-6 text-sm text-muted-foreground">
           先刷新应用并选择目标。建议依次测试
@@ -394,18 +514,11 @@ export function AXLab() {
               </>
             )}
             {tab === "diff" && (
-              <>
-                <p className="mb-3 text-sm">
-                  按同应用的结构路径与角色做候选匹配；布局变化或采集截断可能导致误匹配。临时节点编号不用于跨快照匹配。
-                </p>
-                {!before ? (
-                  <p>再采集一次才能对比。</p>
-                ) : (
-                  <pre className="whitespace-pre-wrap break-all text-xs">
-                    {JSON.stringify(differences, null, 2)}
-                  </pre>
-                )}
-              </>
+              <AXDiffView
+                before={before}
+                after={snapshot}
+                changes={differences}
+              />
             )}
             {tab === "screenshot" && (
               <>

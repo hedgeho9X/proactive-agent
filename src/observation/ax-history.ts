@@ -31,11 +31,11 @@ export class AXHistory {
       throw new Error("invalid_snapshot_directory");
     return path;
   }
-  async save(snapshot: any) {
+  async save(snapshot: any, suppliedId?: string) {
     if (!Array.isArray(snapshot?.nodes) || snapshot.error)
       throw new Error("invalid_ax_snapshot");
     await mkdir(this.root, { recursive: true, mode: 0o700 });
-    const id = "ax-" + randomUUID();
+    const id = suppliedId ?? "ax-" + randomUUID();
     const target = this.path(id);
     const pending = join(this.root, ".pending-" + id);
     const savedAt = new Date().toISOString();
@@ -49,6 +49,8 @@ export class AXHistory {
       pid: snapshot.pid,
       nodes: snapshot.nodes.length,
       partial: !!snapshot.partial,
+      trigger: snapshot.trigger,
+      captureStatus: snapshot.captureStatus,
       file: join(target, "snapshot.json"),
     };
     await mkdir(pending, { mode: 0o700 });
@@ -60,6 +62,34 @@ export class AXHistory {
     });
     await rename(pending, target);
     return { ...value, file: meta.file };
+  }
+  async update(id: string, snapshot: any) {
+    const path = await this.existing(id);
+    const original = await this.get(id);
+    const value = { ...original, ...snapshot, snapshotId: id };
+    const meta = {
+      id,
+      savedAt: original.savedAt,
+      capturedAt: value.capturedAt,
+      app: value.app,
+      bundleId: value.bundleId,
+      pid: value.pid,
+      nodes: value.nodes.length,
+      partial: !!value.partial,
+      trigger: value.trigger,
+      captureStatus: value.captureStatus,
+      file: join(path, "snapshot.json"),
+    };
+    // 更新只针对仍存在的快照目录，不重新创建用户已删除的记录。
+    await writeFile(join(path, "snapshot.next"), JSON.stringify(value), {
+      mode: 0o600,
+    });
+    await rename(join(path, "snapshot.next"), join(path, "snapshot.json"));
+    await writeFile(join(path, "meta.next"), JSON.stringify(meta), {
+      mode: 0o600,
+    });
+    await rename(join(path, "meta.next"), join(path, "meta.json"));
+    return value;
   }
   async list() {
     await mkdir(this.root, { recursive: true, mode: 0o700 });

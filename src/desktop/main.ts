@@ -13,6 +13,7 @@ import {
   clipboard,
 } from "electron";
 import { AXHistory } from "../observation/ax-history.ts";
+import { AXRecorder } from "../observation/ax-recorder.ts";
 import { join, resolve } from "node:path";
 import {
   mkdir,
@@ -41,6 +42,7 @@ app.setPath(
 let window: BrowserWindow | undefined;
 let store: EvidenceStore;
 let collector: NativeCollectorHost;
+let axRecorder: AXRecorder | undefined;
 let runtime: RuntimeHost | undefined;
 let runtimeReady = false;
 let modelRoles: ModelRoles;
@@ -226,6 +228,7 @@ async function closeAll() {
   runtimeReady = false;
   understanding?.abort();
   try {
+    await axRecorder?.stop();
     await collector?.stop();
   } finally {
     try {
@@ -263,6 +266,26 @@ async function bootstrap() {
   const axHistory = new AXHistory(
     join(app.getPath("userData"), "ax-snapshots"),
     (path) => shell.trashItem(path),
+  );
+  axRecorder = new AXRecorder(
+    join(app.getAppPath(), "dist", "native", "ProactiveCollector"),
+    axHistory,
+    async (event) => {
+      const { stdout } = await promisify(execFile)(
+        join(app.getAppPath(), "dist", "native", "ProactiveCollector"),
+        ["--inspect", String(event.pid), "--require-foreground"],
+        { timeout: 15000, maxBuffer: 24 * 1024 * 1024 },
+      );
+      const result = JSON.parse(stdout);
+      if (
+        result.appLaunchedAt &&
+        event.appLaunchedAt &&
+        result.appLaunchedAt !== event.appLaunchedAt
+      )
+        return { error: "target_process_replaced" };
+      return result;
+    },
+    () => notify(),
   );
   modelRoles = new ModelRoles(
     join(app.getPath("userData"), "model-roles.json"),
@@ -396,6 +419,12 @@ async function bootstrap() {
         }
         case "ax.history":
           return axHistory.list();
+        case "ax.record.status":
+          return axRecorder!.status();
+        case "ax.record.start":
+          return axRecorder!.start();
+        case "ax.record.stop":
+          return axRecorder!.stop();
         case "ax.load":
           return axHistory.get(String(p.id));
         case "ax.copy": {
@@ -406,9 +435,19 @@ async function bootstrap() {
           return { copied: true };
         }
         case "ax.delete":
+          if (
+            axRecorder!.status().state === "running" ||
+            axRecorder!.status().pending
+          )
+            throw new Error("stop_recording_before_delete");
           await axHistory.remove(String(p.id));
           return { deleted: true };
         case "ax.clear": {
+          if (
+            axRecorder!.status().state === "running" ||
+            axRecorder!.status().pending
+          )
+            throw new Error("stop_recording_before_delete");
           const choice = await dialog.showMessageBox({
             type: "warning",
             buttons: ["取消", "移到废纸篓"],

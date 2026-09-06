@@ -150,6 +150,13 @@ final class Collector: @unchecked Sendable {
     }
 }
 if CommandLine.arguments.contains("--inspect-apps") { emit(["apps":inspectorApps()]); exit(0) }
+if CommandLine.arguments.contains("--watch-input") {
+    _ = NSApplication.shared
+    let watcher = InputWatch(); watcher.start()
+    // 父进程退出或停止时关闭 stdin，避免孤儿监听进程继续记录。
+    DispatchQueue.global().async { while readLine() != nil {} ; exit(0) }
+    RunLoop.main.run(); exit(0)
+}
 if let index = CommandLine.arguments.firstIndex(of:"--inspect"), CommandLine.arguments.count > index + 1, let pid = Int32(CommandLine.arguments[index + 1]) {
     // 一次性命令也需初始化 AppKit 的窗口服务连接，供 ScreenCaptureKit 使用。
     _ = NSApplication.shared

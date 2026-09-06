@@ -12,6 +12,8 @@ func inspectorApps() -> [[String: Any]] {
 func inspectAX(_ pid: pid_t) async -> [String: Any] {
     let began = Date()
     guard let app = NSRunningApplication(processIdentifier: pid) else { return ["error":"目标应用已退出"] }
+    let requireForeground = CommandLine.arguments.contains("--require-foreground")
+    if requireForeground && NSWorkspace.shared.frontmostApplication?.processIdentifier != pid { return ["error":"foreground_changed_before_capture"] }
     let application = AXUIElementCreateApplication(pid)
     var nodes = [[String: Any]]()
     var refs = [AXUIElement]()
@@ -52,10 +54,20 @@ func inspectAX(_ pid: pid_t) async -> [String: Any] {
         let error = AXUIElementCopyAttributeValue(element, name as CFString, &value)
         return (error, value)
     }
-    func visit(_ element: AXUIElement, parent: String?, path: String, depth: Int) {
+    func visit(_ element: AXUIElement, parent: String?, path: String, depth: Int, walkChildren: Bool = true) {
         guard nodes.count < 800, depth < 20, Date() < deadline else { partial = true; return }
         let id = identifier(element)
-        if nodes.contains(where: { $0["id"] as? String == id }) { return }
+        if let index = nodes.firstIndex(where: { $0["id"] as? String == id }) {
+            // 焦点预读取不能改变节点在窗口树中的规范路径。
+            if nodes[index]["path"] as? String == "focus" && path != "focus" {
+                nodes[index]["path"] = path; nodes[index]["parent"] = parent as Any? ?? NSNull()
+                if nodes[index]["protected"] as? Bool != true {
+                    let (_, value) = read(element,kAXChildrenAttribute)
+                    for (i, child) in (value as? [AXUIElement] ?? []).enumerated() { visit(child,parent:id,path:"\(path)/\(i)",depth:depth+1) }
+                }
+            }
+            return
+        }
         AXUIElementSetMessagingTimeout(element, 0.03)
         let (_, subrole) = read(element, kAXSubroleAttribute)
         let secure = subrole as? String == "AXSecureTextField"
@@ -81,7 +93,7 @@ func inspectAX(_ pid: pid_t) async -> [String: Any] {
         var actions: CFArray?
         let actionError = secure ? AXError.failure : AXUIElementCopyActionNames(element, &actions)
         nodes.append(["id":id, "parent":parent as Any? ?? NSNull(), "path":path, "protected":secure, "attributes":attributes, "attributeListCode":listError.rawValue, "parameterizedAttributes":parameterized as? [String] ?? [], "parameterizedCode":parameterError.rawValue, "actions":actions as? [String] ?? [], "actionsCode":actionError.rawValue])
-        for (index, child) in children.enumerated() { visit(child, parent:id, path:"\(path)/\(index)", depth:depth + 1) }
+        if walkChildren { for (index, child) in children.enumerated() { visit(child, parent:id, path:"\(path)/\(index)", depth:depth + 1) } }
     }
     AXUIElementSetMessagingTimeout(application, 0.03)
     let (windowError, windowValue) = read(application, kAXFocusedWindowAttribute)
@@ -89,9 +101,10 @@ func inspectAX(_ pid: pid_t) async -> [String: Any] {
     let (focusError, focusValue) = read(application, kAXFocusedUIElementAttribute)
     let focus = focusValue.flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil }
     // 焦点优先独立读取，避免大树耗尽预算后丢失输入框。
-    if let focus { visit(focus, parent:nil, path:"focus", depth:0) }
+    if let focus { visit(focus, parent:nil, path:"focus", depth:0, walkChildren:false) }
     visit(window ?? application, parent:nil, path:"window", depth:0)
     var screenshot: [String: Any] = ["status":"unavailable"]
+    var windowId: UInt32?
     if protectedFound { screenshot = ["status":"excluded", "reason":"protected_input"] }
     else {
         do {
@@ -103,6 +116,7 @@ func inspectAX(_ pid: pid_t) async -> [String: Any] {
                 return abs(candidate.frame.minX - expected.minX) < 2 && abs(candidate.frame.minY - expected.minY) < 2 && abs(candidate.frame.width - expected.width) < 2 && abs(candidate.frame.height - expected.height) < 2
             }
             if matches.count == 1, let target = matches.first {
+                windowId = target.windowID
                 let config = SCStreamConfiguration()
                 config.width = min(1600, Int(target.frame.width)); config.height = max(1, Int(Double(config.width) * target.frame.height / max(1,target.frame.width))); config.showsCursor = false
                 let image = try await SCScreenshotManager.captureImage(contentFilter:SCContentFilter(desktopIndependentWindow:target), configuration:config)
@@ -110,5 +124,10 @@ func inspectAX(_ pid: pid_t) async -> [String: Any] {
             } else { screenshot = ["status":"unavailable", "reason":"window_match_ambiguous_or_missing", "candidates":matches.count] }
         } catch { screenshot = ["status":"error", "code":(error as NSError).code] }
     }
-    return ["pid":Int(pid), "app":app.localizedName ?? "", "bundleId":app.bundleIdentifier ?? "", "capturedAt":ISO8601DateFormatter().string(from:began), "elapsedMs":Int(Date().timeIntervalSince(began)*1000), "nodes":nodes, "partial":partial, "limits":["nodes":800,"depth":20,"milliseconds":3000,"textCharacters":8000], "windowCode":windowError.rawValue, "focusCode":focusError.rawValue, "focusId":focus.map { identifier($0) } as Any? ?? NSNull(), "permissions":permissions(), "screenshot":screenshot]
+    if requireForeground {
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid { return ["error":"foreground_changed_during_capture"] }
+        if let window, let current = attribute(application,kAXFocusedWindowAttribute), CFGetTypeID(current) == AXUIElementGetTypeID(), !CFEqual(window,current) { return ["error":"window_changed_during_capture"] }
+    }
+    let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime,.withFractionalSeconds]
+    return ["captureSchema":2,"appLaunchedAt":app.launchDate.map { formatter.string(from:$0) } ?? "","windowId":windowId as Any? ?? NSNull(),"pid":Int(pid), "app":app.localizedName ?? "", "bundleId":app.bundleIdentifier ?? "", "capturedAt":formatter.string(from:began), "elapsedMs":Int(Date().timeIntervalSince(began)*1000), "nodes":nodes, "partial":partial, "limits":["nodes":800,"depth":20,"milliseconds":3000,"textCharacters":8000], "windowCode":windowError.rawValue, "focusCode":focusError.rawValue, "focusId":focus.map { identifier($0) } as Any? ?? NSNull(), "permissions":permissions(), "screenshot":screenshot]
 }
