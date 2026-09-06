@@ -1,12 +1,15 @@
 # Proactive Lab
 
-独立的 macOS 主动式 Agent 实验应用。当前完成 S0：真正 DSH 原子组成的 Node sidecar、连续主会话、可继续子代理、修正与取消、仅提案工具、JSONL 历史和合成图片通道。原生采集和 UI 尚未实现。
+独立 macOS 主动式 Agent 实验应用：原生动作与证据采集、React 调试工作台、DSH 主子代理，以及可配置的 Gemini 事实理解。默认采集关闭，无模型凭证时显示 unavailable；Fixture 演示不调用真实模型。
 
-使用 Bun 1.3.14+ 安装依赖，sidecar 需要 Node 22.19+ 或 Node 24+。执行 `bun install --frozen-lockfile`、`bun run typecheck`、`bun test`；`bun run demo` 启动无付费模型的短演示。测试包含真实 20 秒延迟子任务，通常约 21 秒完成。
+使用 Bun 1.3.14+、macOS Swift 工具链。安装执行 `bun install --frozen-lockfile`；`bun run desktop` 编译并启动；`bun run package:mac` 生成独立 `.app`。桌面使用 Electron 自身的 Node 运行编译JS sidecar，不依赖用户机器上的系统 Node。
 
-所有模型响应明确标为 deterministic fixture，不能理解真实屏幕。没有真实模型凭证配置；不读取旧应用配置或用户数据。演示的会话和附件位于本项目忽略的 `.runtime` 目录。
+`bun run typecheck`、`bun run format:check`、`bun run test` 验证代码。运行时测试包含真正20秒后台子任务。`bun run demo` 是无桌面采集、无真实模型的短命令行演示。
+
+API Key 仅保留在本次进程内存；本应用不读取旧应用配置。文件工具只读取用户选定目录，所有外部写工具仅生成 not_executed 提案。Web / 日程读取 provider 尚未配置。跨重启任务业务索引、正式签名、公证及完整PRD验收仍未完成。
 
 - [需求](docs/PRD.md)
 - [实施进度](docs/IMPLEMENTATION-STATUS.md)
-- [S0 验证与已知边界](docs/S0-RUNTIME-VERIFICATION.md)
-- [下一切片交接](docs/IMPLEMENTATION-HANDOFF.md)
+- [S0 验证](docs/S0-RUNTIME-VERIFICATION.md)
+- [桌面与模型验证](docs/DESKTOP-MODEL-VERIFICATION.md)
+- [原生采集验证](docs/S1-CAPTURE-VERIFICATION.md)

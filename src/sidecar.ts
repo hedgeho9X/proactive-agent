@@ -3,21 +3,64 @@ import { ProactiveRuntime } from "./runtime.ts";
 if (!process.send) throw new Error("sidecar_requires_parent_ipc");
 const root = process.argv[2];
 if (!root) throw new Error("runtime_root_required");
-const runtime = new ProactiveRuntime(
-  root,
-  (event) => process.send?.({ event }),
-  Number(process.env.PROACTIVE_FIXTURE_DELAY_MS ?? 20_000),
-);
-const ready = runtime.start(process.argv.includes("--resume"));
+const toolPending = new Map<
+  string,
+  { resolve: (value: unknown) => void; reject: (error: Error) => void }
+>();
+let runtime: ProactiveRuntime;
+const ready = new Promise<unknown>((resolve, reject) => {
+  process.once("message", async (raw: any) => {
+    if (!raw.bootstrap) {
+      reject(new Error("bootstrap_required"));
+      return;
+    }
+    const { modelConfig, allowedReadRoot } = raw.bootstrap;
+    runtime = new ProactiveRuntime(
+      root,
+      (event) => process.send?.({ event }),
+      Number(process.env.PROACTIVE_FIXTURE_DELAY_MS ?? 20_000),
+      {
+        allowedReadRoot,
+        readObservation: (actionId) =>
+          new Promise((resolve, reject) => {
+            const id = crypto.randomUUID();
+            toolPending.set(id, { resolve, reject });
+            process.send?.({ toolRequest: { id, actionId } });
+            setTimeout(() => {
+              if (toolPending.delete(id))
+                reject(new Error("observation_read_timeout"));
+            }, 5000).unref();
+          }),
+      },
+    );
+    try {
+      resolve(
+        await runtime.start(process.argv.includes("--resume"), modelConfig),
+      );
+    } catch (error) {
+      reject(error);
+    }
+  });
+});
 ready.then(
   (value) => process.send?.({ ready: value }),
   async (error) => {
-    await runtime.close();
+    await runtime?.close();
     process.exitCode = 1;
     process.send?.({ fatal: String(error) }, () => process.disconnect?.());
   },
 );
-process.on("message", async (raw) => {
+process.on("message", async (raw: any) => {
+  if (raw.bootstrap) return;
+  if (raw.toolResponse) {
+    const p = toolPending.get(raw.toolResponse.id);
+    toolPending.delete(raw.toolResponse.id);
+    if (p)
+      raw.toolResponse.error
+        ? p.reject(new Error(raw.toolResponse.error))
+        : p.resolve(raw.toolResponse.result);
+    return;
+  }
   const message = raw as { id: number; method: string; params?: any };
   try {
     await ready;
@@ -40,7 +83,7 @@ process.on("message", async (raw) => {
         result = runtime.events(p.cursors);
         break;
       case "close":
-        await runtime.close();
+        await runtime?.close();
         process.send?.({ id: message.id, result: { closed: true } }, () =>
           process.disconnect?.(),
         );
@@ -54,5 +97,5 @@ process.on("message", async (raw) => {
   }
 });
 process.on("disconnect", () => {
-  void runtime.close();
+  void runtime?.close();
 });

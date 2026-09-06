@@ -1,6 +1,7 @@
 import { fork, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
+import type { ModelConfig } from "./model/gemini.ts";
 // 宿主拥有 sidecar 生命周期；丢失 IPC 时子进程自行停止所有 DSH 活动。
 export class RuntimeHost extends EventEmitter {
   readonly child: ChildProcess;
@@ -20,22 +21,53 @@ export class RuntimeHost extends EventEmitter {
     {
       resume = false,
       delayMs = 20_000,
-    }: { resume?: boolean; delayMs?: number } = {},
+      sidecarPath = resolve("dist/sidecar.mjs"),
+      execPath = process.env.PROACTIVE_NODE ?? "node",
+      electronNode = false,
+      modelConfig,
+      allowedReadRoot,
+      readObservation,
+    }: {
+      resume?: boolean;
+      delayMs?: number;
+      sidecarPath?: string;
+      execPath?: string;
+      electronNode?: boolean;
+      modelConfig?: ModelConfig;
+      allowedReadRoot?: string;
+      readObservation?: (id: string) => Promise<unknown>;
+    } = {},
   ) {
     super();
-    this.child = fork(
-      fileURLToPath(new URL("./sidecar.ts", import.meta.url)),
-      [root, ...(resume ? ["--resume"] : [])],
-      {
-        execPath: process.env.PROACTIVE_NODE ?? "node",
-        execArgv: ["--experimental-transform-types"],
-        stdio: ["ignore", "ignore", "pipe", "ipc"],
-        env: {
-          PATH: process.env.PATH,
-          PROACTIVE_FIXTURE_DELAY_MS: String(delayMs),
-        },
+    this.child = fork(sidecarPath, [root, ...(resume ? ["--resume"] : [])], {
+      execPath,
+      execArgv: [],
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
+      env: {
+        PATH: process.env.PATH,
+        ...(electronNode ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+        PROACTIVE_FIXTURE_DELAY_MS: String(delayMs),
       },
+    });
+    this.child.once("spawn", () =>
+      this.child.send({ bootstrap: { modelConfig, allowedReadRoot } }),
     );
+    this.child.on("message", async (raw: any) => {
+      if (!raw.toolRequest) return;
+      try {
+        const result = readObservation
+          ? await readObservation(raw.toolRequest.actionId)
+          : { status: "unavailable" };
+        this.child.send({ toolResponse: { id: raw.toolRequest.id, result } });
+      } catch {
+        this.child.send({
+          toolResponse: {
+            id: raw.toolRequest.id,
+            error: "observation_read_failed",
+          },
+        });
+      }
+    });
     this.child.stderr?.on("data", (data) =>
       this.emit("diagnostic", String(data)),
     );
