@@ -9,6 +9,26 @@ let outputLock = NSLock()
 func emit(_ value: [String: Any]) { outputLock.lock(); defer { outputLock.unlock() }; if let data = try? JSONSerialization.data(withJSONObject: value), let line = String(data: data, encoding: .utf8) { print(line); fflush(stdout) } }
 func iso() -> String { ISO8601DateFormatter().string(from: Date()) }
 func permissions() -> [String: Bool] { ["accessibility": AXIsProcessTrusted(), "screenRecording": CGPreflightScreenCaptureAccess(), "inputMonitoring": CGPreflightListenEventAccess()] }
+// 先确认收到命令，再在主线程发起系统授权，避免用户响应弹窗期间触发协议超时。
+func requestPermission(_ name: String) {
+    DispatchQueue.main.async {
+        let pane: String
+        switch name {
+        case "accessibility":
+            _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+            pane = "Privacy_Accessibility"
+        case "screenRecording":
+            _ = CGRequestScreenCaptureAccess()
+            pane = "Privacy_ScreenCapture"
+        case "inputMonitoring":
+            _ = CGRequestListenEventAccess()
+            pane = "Privacy_ListenEvent"
+        default: return
+        }
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") { NSWorkspace.shared.open(url) }
+        emit(["type":"permissions","permissions":permissions()])
+    }
+}
 func bounds(_ element: AXUIElement) -> CGRect? {
     guard let position = attribute(element,kAXPositionAttribute), let size = attribute(element,kAXSizeAttribute), CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
     var point = CGPoint.zero; var extent = CGSize.zero
@@ -31,9 +51,13 @@ final class Collector: @unchecked Sendable {
     let epoch = UUID().uuidString; var session = UUID().uuidString; var allowed = Set<String>(); var busy = false; var suspended = false
     let worker = DispatchQueue(label: "proactive.capture"); var activation: NSObjectProtocol?; var observer: AXObserver?; var observedRoot: AXUIElement?; var systemObservers = [NSObjectProtocol]()
     func stop() { cacheLock.lock(); cache = nil; cacheLock.unlock(); if let observer { CFRunLoopRemoveSource(CFRunLoopGetMain(),AXObserverGetRunLoopSource(observer),.commonModes) }; observer = nil; observedRoot = nil; for token in systemObservers { NSWorkspace.shared.notificationCenter.removeObserver(token) }; systemObservers.removeAll(); if let tap { CGEvent.tapEnable(tap: tap, enable: false); CFMachPortInvalidate(tap) }; tap = nil; if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }; source = nil; if let activation { NSWorkspace.shared.notificationCenter.removeObserver(activation) }; activation = nil; emit(["type":"status","state":"stopped"]) }
-    func start(_ bundles: [String]) {
+    var allApps = false
+    // 所有应用模式只跟随前台窗口；空白名单仍需显式选择所有应用才可启动。
+    func allows(_ app: NSRunningApplication) -> Bool { app.processIdentifier != getpid() && app.processIdentifier != getppid() && app.bundleIdentifier != "io.github.hedgeho9x.proactive-agent" && (allApps || allowed.contains(app.bundleIdentifier ?? "")) }
+    func start(_ bundles: [String], allApps: Bool = false) {
         guard tap == nil else { return }; allowed = Set(bundles)
-        guard !allowed.isEmpty, permissions().values.allSatisfy({$0}) else { emit(["type":"status","state":"unavailable","reason":"permissions_or_allowlist_missing","permissions":permissions()]); return }
+        self.allApps = allApps
+        guard allApps || !allowed.isEmpty, permissions().values.allSatisfy({$0}) else { emit(["type":"status","state":"unavailable","reason":"permissions_or_allowlist_missing","permissions":permissions()]); return }
         session = UUID().uuidString
         let types: [CGEventType] = [.leftMouseDown,.leftMouseUp,.rightMouseDown,.rightMouseUp,.otherMouseDown,.otherMouseUp,.leftMouseDragged,.rightMouseDragged,.otherMouseDragged,.keyDown,.keyUp,.flagsChanged,.scrollWheel]
         let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
@@ -51,7 +75,7 @@ final class Collector: @unchecked Sendable {
     }
     func attachAX() {
         if let observer { CFRunLoopRemoveSource(CFRunLoopGetMain(),AXObserverGetRunLoopSource(observer),.commonModes) }; observer = nil
-        guard let app = NSWorkspace.shared.frontmostApplication, allowed.contains(app.bundleIdentifier ?? "") else { return }
+        guard let app = NSWorkspace.shared.frontmostApplication, allows(app) else { return }
         let root = AXUIElementCreateApplication(app.processIdentifier); observedRoot = root
         let result = AXObserverCreate(app.processIdentifier, { _, _, notification, info in
             if let info { Unmanaged<Collector>.fromOpaque(info).takeUnretainedValue().record("ax_notification",input:["notification":notification as String],point:nil) }
@@ -76,7 +100,7 @@ final class Collector: @unchecked Sendable {
     }
     func record(_ kind: String, input: [String:Any], point: CGPoint?) {
         guard let app = NSWorkspace.shared.frontmostApplication else { return }
-        sequence += 1; let id = UUID().uuidString; let time = iso(); let permitted = !suspended && allowed.contains(app.bundleIdentifier ?? "")
+        sequence += 1; let id = UUID().uuidString; let time = iso(); let permitted = !suspended && allows(app)
         emit(["type":"action","action":["schema_version":"1","action_id":id,"capture_session_id":session,"collector_epoch":epoch,"source_sequence":String(sequence),"occurred_at":time,"received_at":time,"monotonic_ns":String(DispatchTime.now().uptimeNanoseconds),"timezone":TimeZone.current.identifier,"kind":kind,"actor":"unknown","origin":"native_observation","trust_class":"untrusted_observation","app":["pid":app.processIdentifier,"bundle_id":app.bundleIdentifier ?? "","name":app.localizedName ?? ""],"input":input,"policy_status":permitted ? "allowed":"excluded","reason_codes":permitted ? []:["app_not_allowlisted"]]])
         if !permitted { emit(["type":"artifact","action_id":id,"kind":"screenshot","slot":"screenshot_before","status":"excluded","capturedAt":time,"reason":"app_not_allowlisted"]) }
         guard permitted else { for kind in ["ax","screenshot","ocr","screenshot_before"] { missing(id, kind, "excluded", "app_not_allowlisted") }; return }
@@ -124,6 +148,6 @@ final class Collector: @unchecked Sendable {
     }
 }
 let collector = Collector()
-DispatchQueue.global().async { while let line = readLine() { guard let data = line.data(using:.utf8), let command = try? JSONSerialization.jsonObject(with:data) as? [String:Any] else { continue }; DispatchQueue.main.async { switch command["command"] as? String { case "permissions": emit(["type":"permissions","permissions":permissions()]); case "start": collector.start(command["allowedBundleIds"] as? [String] ?? []); case "stop": collector.stop(); case "shutdown": collector.stop(); exit(0); default: emit(["type":"error","reason":"unknown_command"]) }; if let requestId = command["request_id"] as? String { emit(["type":"ack","request_id":requestId]) } } }; DispatchQueue.main.async { collector.stop(); exit(0) } }
+DispatchQueue.global().async { while let line = readLine() { guard let data = line.data(using:.utf8), let command = try? JSONSerialization.jsonObject(with:data) as? [String:Any] else { continue }; DispatchQueue.main.async { switch command["command"] as? String { case "permissions": emit(["type":"permissions","permissions":permissions()]); case "permission.request": requestPermission(command["permission"] as? String ?? ""); case "start": collector.start(command["allowedBundleIds"] as? [String] ?? [], allApps: command["allApps"] as? Bool ?? false); case "stop": collector.stop(); case "shutdown": collector.stop(); exit(0); default: emit(["type":"error","reason":"unknown_command"]) }; if let requestId = command["request_id"] as? String { emit(["type":"ack","request_id":requestId]) } } }; DispatchQueue.main.async { collector.stop(); exit(0) } }
 emit(["type":"status","state":"stopped"])
 RunLoop.main.run()

@@ -13,10 +13,10 @@ export class ModelRoles {
     roles.map((role) => [
       role,
       {
-        protocol: "gemini",
-        baseUrl: "https://generativelanguage.googleapis.com",
+        protocol: "openai-compatible",
+        baseUrl: "https://example.com/v1/",
         apiKey: "",
-        model: "gemini-3.8-flash",
+        model: role === "understanding" ? "gemini-3.8-flash" : "",
         maxCalls: 30,
       },
     ]),

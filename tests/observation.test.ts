@@ -52,6 +52,9 @@ writeFileSync(mockPath, '#!/usr/bin/env node\\n'+${JSON.stringify("import {creat
 const hostStore=new EvidenceStore(':memory:'); const host=new NativeCollectorHost({binaryPath:mockPath,store:hostStore});
 assert.equal(host.status().state,'stopped'); assert.equal((await host.checkPermissions()).permissions.accessibility,true);
 assert.equal((await host.start({allowedBundleIds:['fixture.only']})).state,'running');
+await assert.rejects(host.start({allowedBundleIds:[]}),/explicit_allowlist_required/);
+await assert.rejects(host.requestPermission('invalid'),/invalid_permission/);
+assert.equal((await host.start({allowedBundleIds:[],allApps:true})).state,'running');
 const stopping=host.stop(); assert.equal(host.status().state,'stopping'); await stopping; assert.equal(host.status().state,'stopped'); hostStore.close();
 console.log('PASS');`,
   );

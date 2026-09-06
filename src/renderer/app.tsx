@@ -199,8 +199,9 @@ function ModelForm({
 }) {
   const [draft, setDraft] = useState({
     protocol: config?.protocol ?? "openai-compatible",
-    baseUrl: config?.baseUrl ?? "",
-    model: config?.model ?? "",
+    baseUrl: config?.baseUrl ?? "https://example.com/v1/",
+    model:
+      config?.model ?? (role === "understanding" ? "gemini-3.8-flash" : ""),
     apiKey: "",
   });
   const [saved, setSaved] = useState(false);
@@ -380,6 +381,7 @@ function App() {
   const [error, setError] = useState("");
   const [prompt, setPrompt] = useState("");
   const [bundleIds, setBundleIds] = useState("");
+  const [allApps, setAllApps] = useState(true);
   const [follow, setFollow] = useState(true);
   const [axView, setAXView] = useState("context");
   const [revision, setRevision] = useState("");
@@ -993,15 +995,34 @@ function App() {
           <Separator />
           <FieldGroup className="gap-3">
             <Field className="gap-2">
-              <FieldLabel htmlFor="capture-apps">
-                观察应用 · Bundle IDs
-              </FieldLabel>
-              <Input
-                id="capture-apps"
-                value={bundleIds}
-                onChange={(e) => setBundleIds(e.target.value)}
-                placeholder="com.apple.TextEdit"
-              />
+              <FieldLabel htmlFor="capture-scope">观察范围</FieldLabel>
+              <Select
+                value={allApps ? "all" : "selected"}
+                onValueChange={(value) => setAllApps(value === "all")}
+                disabled={state.collector.state === "running"}
+              >
+                <SelectTrigger id="capture-scope">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">所有应用（跟随前台窗口）</SelectItem>
+                  <SelectItem value="selected">指定应用</SelectItem>
+                </SelectContent>
+              </Select>
+              {!allApps && (
+                <>
+                  <FieldLabel htmlFor="capture-apps">
+                    应用 Bundle ID（逗号或空格分隔）
+                  </FieldLabel>
+                  <Input
+                    id="capture-apps"
+                    value={bundleIds}
+                    onChange={(e) => setBundleIds(e.target.value)}
+                    placeholder="com.apple.TextEdit"
+                    disabled={state.collector.state === "running"}
+                  />
+                </>
+              )}
             </Field>
             <div className="flex items-center gap-2">
               <Button
@@ -1010,7 +1031,7 @@ function App() {
                 disabled={!!busy}
                 onClick={() => void act("permissions")}
               >
-                权限
+                检测权限
               </Button>
               <span className="flex-1" />
               <Badge variant="outline">
@@ -1020,14 +1041,16 @@ function App() {
                 size="sm"
                 disabled={
                   !!busy ||
-                  (!bundleIds.trim() && state.collector.state !== "running")
+                  (!allApps &&
+                    !bundleIds.trim() &&
+                    state.collector.state !== "running")
                 }
                 onClick={() =>
                   void act(
                     state.collector.state === "running"
                       ? "capture.stop"
                       : "capture.start",
-                    { bundleIds },
+                    { bundleIds, allApps },
                   )
                 }
               >
@@ -1039,13 +1062,37 @@ function App() {
                 {state.collector.reason}
               </p>
             )}
-            {state.collector.permissions && (
-              <p className="text-xs text-muted-foreground">
-                {Object.entries(state.collector.permissions)
-                  .map(([name, value]) => `${name}: ${value ? "✓" : "—"}`)
-                  .join(" · ")}
-              </p>
-            )}
+            {Object.entries({
+              accessibility: "辅助功能",
+              screenRecording: "屏幕录制",
+              inputMonitoring: "输入监控",
+            }).map(([permission, label]) => (
+              <div
+                key={permission}
+                className="flex items-center justify-between gap-2 text-sm"
+              >
+                <span>
+                  {label} ·{" "}
+                  {state.collector.permissions?.[permission] === true
+                    ? "采集进程可用"
+                    : state.collector.permissions?.[permission] === false
+                      ? "未授权"
+                      : "未检测"}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!!busy}
+                  onClick={() => void act("permission.request", { permission })}
+                >
+                  去授权
+                </Button>
+              </div>
+            ))}
+            <p className="text-xs text-muted-foreground">
+              请在系统设置中确认授权应用身份，完成后点击“检测权限”。若系统要求，请退出并重新打开应用。开发版可能显示为
+              Electron。
+            </p>
           </FieldGroup>
           <Separator />
           <div className="flex gap-2">

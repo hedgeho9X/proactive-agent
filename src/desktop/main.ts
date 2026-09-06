@@ -364,12 +364,16 @@ async function bootstrap() {
         case "permissions":
           await collector.checkPermissions();
           return collector.status();
+        case "permission.request":
+          return collector.requestPermission(String(p.permission));
         case "capture.start": {
           const allowedBundleIds = String(p.bundleIds ?? "")
             .split(/[\s,]+/)
             .filter(Boolean);
-          if (!allowedBundleIds.length) throw new Error("allowlist_required");
-          await collector.start({ allowedBundleIds });
+          const allApps = p.allApps === true;
+          if (!allApps && !allowedBundleIds.length)
+            throw new Error("allowlist_required");
+          await collector.start({ allowedBundleIds, allApps });
           return snapshot();
         }
         case "capture.stop":

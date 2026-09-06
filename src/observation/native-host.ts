@@ -152,10 +152,20 @@ export class NativeCollectorHost {
   async checkPermissions(): Promise<CollectorStatus> {
     return this.request("permissions");
   }
+  async requestPermission(permission: string): Promise<CollectorStatus> {
+    if (
+      !["accessibility", "screenRecording", "inputMonitoring"].includes(
+        permission,
+      )
+    )
+      throw new Error("invalid_permission");
+    return this.request("permission.request", { permission });
+  }
   async start(config: {
     allowedBundleIds: string[];
+    allApps?: boolean;
   }): Promise<CollectorStatus> {
-    if (!config.allowedBundleIds.length)
+    if (!config.allApps && !config.allowedBundleIds.length)
       throw new Error("explicit_allowlist_required");
     this.current = { state: "starting" };
     return this.request("start", config);

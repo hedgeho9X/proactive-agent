@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { ModelRoles } from "../src/model/config.ts";
-import { OpenAIAdapter } from "../src/model/openai.ts";
+import { OpenAIAdapter, completion } from "../src/model/openai.ts";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,14 @@ test("三组配置独立、任意model id、snapshot与文件无key", async () =
   try {
     const file = join(dir, "roles.json");
     const roles = new ModelRoles(file);
+    const defaults = roles.snapshot();
+    expect(defaults.understanding.protocol).toBe("openai-compatible");
+    expect(defaults.understanding.baseUrl).toBe(
+      "https://example.com/v1/",
+    );
+    expect(defaults.understanding.model).toBe("gemini-3.8-flash");
+    expect(defaults.main.model).toBe("");
+    expect(defaults.subagent.model).toBe("");
     await roles.update("main", {
       protocol: "openai-compatible",
       baseUrl: "https://example.com/v1",
@@ -35,6 +43,38 @@ test("三组配置独立、任意model id、snapshot与文件无key", async () =
     expect(reloaded.get("main")).toBeUndefined();
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("OpenAI根地址补齐v1，同时保留已有版本和代理路径", async () => {
+  const original = globalThis.fetch;
+  const urls: string[] = [];
+  try {
+    globalThis.fetch = (async (url: any) => {
+      urls.push(String(url));
+      return new Response("{}");
+    }) as any;
+    for (const baseUrl of [
+      "https://example.com/",
+      "https://example.com/v1/",
+      "https://example.com/proxy/v2",
+    ])
+      await completion(
+        {
+          protocol: "openai-compatible",
+          baseUrl,
+          apiKey: "fixture",
+          model: "fixture",
+        },
+        {},
+      );
+    expect(urls).toEqual([
+      "https://example.com/v1/chat/completions",
+      "https://example.com/v1/chat/completions",
+      "https://example.com/proxy/v2/chat/completions",
+    ]);
+  } finally {
+    globalThis.fetch = original;
   }
 });
 

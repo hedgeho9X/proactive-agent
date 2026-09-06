@@ -12,8 +12,11 @@ export async function completion(
   body: any,
   signal?: AbortSignal,
 ) {
+  // 根地址补齐标准 v1；用户提供的版本路径或代理前缀原样保留。
+  const base = new URL(config.baseUrl);
+  if (base.pathname === "/") base.pathname = "/v1";
   const response = await fetch(
-    config.baseUrl.replace(/\/$/, "") + "/chat/completions",
+    base.toString().replace(/\/$/, "") + "/chat/completions",
     {
       method: "POST",
       headers: {

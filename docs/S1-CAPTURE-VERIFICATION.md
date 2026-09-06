@@ -1,6 +1,6 @@
 # S1/S2 采集与证据切片验证
 
-本切片是原生采集 spike 与本地证据存储，不代表 PRD CAP-01/02 全部验收。采集默认关闭，只有显式 `start({allowedBundleIds})` 后才启用事件监听；启动要求三项 preflight 均通过，不请求权限。
+本切片是原生采集 spike 与本地证据存储，不代表 PRD CAP-01/02 全部验收。下文保留当时的验证记录。后续已补齐“所有应用”和显式系统授权入口，当前行为见 [初始化与观察授权](SETUP-DEFAULTS.md)。采集默认关闭，启动仍要求三项 preflight 均通过。
 
 已实现：Swift listen-only CGEventTap 的 down/up、拖拽、普通键类别（无字符）、修饰键、scroll phase/momentum；应用激活事件；有预算的 AX 树和预算外命中节点；仅截取允许前台进程的一个可见窗口，使用 ScreenCaptureKit PNG 与 Vision OCR；NDJSON 独立时间戳。AX 发现安全节点时整组证据排除。高负载原始元数据保留，重证据显示 dropped_by_backpressure。
 
