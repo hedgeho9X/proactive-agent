@@ -11,6 +11,8 @@ import {
   dialog,
   shell,
   clipboard,
+  nativeImage,
+  ClipboardItem,
 } from "electron";
 import { AXHistory } from "../observation/ax-history.ts";
 import { AXRecorder } from "../observation/ax-recorder.ts";
@@ -451,13 +453,36 @@ async function bootstrap() {
             item,
             await axHistory.list(),
           );
-          clipboard.writeText(
+          await clipboard.writeText(
             `AX 快照 ID：${item.snapshotId}\n本地文件：${item.file}` +
               (previous
                 ? `\n同应用上次有效事件：${previous.id}\n基线文件：${previous.file}\n中间未采集事件：${missing}`
                 : "\n没有更早的同应用有效采集"),
           );
           return { copied: true };
+        }
+        case "ax.copyImage": {
+          const data = p.dataUrl;
+          if (
+            typeof data !== "string" ||
+            data.length > 32 * 1024 * 1024 ||
+            !data.startsWith("data:image/png;base64,")
+          )
+            throw new Error("invalid_image");
+          const image = nativeImage.createFromDataURL(data);
+          if (image.isEmpty()) throw new Error("empty_image");
+          await clipboard.write([
+            new ClipboardItem({
+              "image/png": new Blob([new Uint8Array(image.toPNG())], {
+                type: "image/png",
+              }),
+            }),
+          ]);
+          return {
+            copied: true,
+            width: image.getSize().width,
+            height: image.getSize().height,
+          };
         }
         case "ax.delete":
           if (

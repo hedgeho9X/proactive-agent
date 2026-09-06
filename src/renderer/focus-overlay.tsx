@@ -1,5 +1,14 @@
 import React, { useState } from "react";
 import { projectBBox } from "./bbox.ts";
+import { ContextMenu } from "radix-ui";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import { screenshotPNG } from "./copy-screenshot.ts";
 
 const reason = (item: any) =>
   item?.status === "not_applicable"
@@ -20,6 +29,11 @@ export function FocusOverlay({
   const [selectionColor, setSelectionColor] = useState("#f59e0b");
   const [clickColor, setClickColor] = useState("#10b981");
   const [mode, setMode] = useState("both");
+  const [expanded, setExpanded] = useState(false);
+  const [zoom, setZoom] = useState(1.5);
+  const [naturalWidth, setNaturalWidth] = useState(screenshot.pixelWidth ?? 0);
+  const [copying, setCopying] = useState(false);
+  const [copyStatus, setCopyStatus] = useState("");
   const mapped =
     screenshot.coordinateSpace === "screen_top_left_points" &&
     screenshot.shadowsExcluded === true;
@@ -34,6 +48,114 @@ export function FocusOverlay({
       ? projectBBox(screenshot.regions?.[layer.key]?.rect, screenshot.frame)
       : null,
   }));
+  const copy = async (annotated: boolean) => {
+    setCopying(true);
+    setCopyStatus("");
+    try {
+      const visible = enabled
+        ? layers
+            .filter(
+              (layer) => layer.box && (mode === "both" || mode === layer.key),
+            )
+            .map((layer) => ({ box: layer.box!, color: layer.color, opacity }))
+        : [];
+      const dataUrl = annotated
+        ? await screenshotPNG(screenshot.data, visible)
+        : "data:image/png;base64," + screenshot.data;
+      await window.proactive.invoke("ax.copyImage", { dataUrl });
+      setCopyStatus(annotated ? "已复制图片（含当前标注）" : "已复制原图");
+    } catch {
+      setCopyStatus("复制图片失败，请重试");
+    } finally {
+      setCopying(false);
+    }
+  };
+  const imageView = (large: boolean) => (
+    <ContextMenu.Root>
+      <ContextMenu.Trigger asChild>
+        <div
+          className={`relative shrink-0 overflow-hidden rounded border ${large ? "" : "w-full cursor-zoom-in"}`}
+          style={
+            large
+              ? {
+                  width: (naturalWidth || screenshot.pixelWidth || 1200) * zoom,
+                  maxWidth: "none",
+                }
+              : {
+                  maxWidth:
+                    (screenshot.pixelWidth ?? naturalWidth) || undefined,
+                }
+          }
+          role={large ? undefined : "button"}
+          tabIndex={large ? undefined : 0}
+          aria-label={large ? "放大截图" : "点击放大截图"}
+          onClick={() => {
+            if (!large) setExpanded(true);
+          }}
+          onKeyDown={(event) => {
+            if (!large && (event.key === "Enter" || event.key === " ")) {
+              event.preventDefault();
+              setExpanded(true);
+            }
+          }}
+        >
+          <img
+            alt={large ? "放大的目标窗口快照" : "目标应用窗口快照"}
+            draggable={false}
+            className="block h-auto w-full"
+            src={`data:image/png;base64,${screenshot.data}`}
+            onLoad={(event) =>
+              setNaturalWidth(event.currentTarget.naturalWidth)
+            }
+          />
+          {enabled &&
+            layers
+              .filter((layer) => mode === "both" || mode === layer.key)
+              .map(
+                (layer) =>
+                  layer.box && (
+                    <div
+                      key={layer.key}
+                      data-bbox={layer.key}
+                      aria-label={`${layer.label}范围`}
+                      className="pointer-events-none absolute box-border border-2"
+                      style={{
+                        left: `${layer.box.left}%`,
+                        top: `${layer.box.top}%`,
+                        width: `${layer.box.width}%`,
+                        height: `${layer.box.height}%`,
+                        borderColor: layer.color,
+                        backgroundColor:
+                          layer.color +
+                          Math.round(opacity * 255)
+                            .toString(16)
+                            .padStart(2, "0"),
+                      }}
+                    />
+                  ),
+              )}
+        </div>
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content className="z-[100] min-w-44 rounded border bg-background p-1 text-sm shadow-lg">
+          <ContextMenu.Item
+            disabled={copying}
+            onSelect={() => void copy(true)}
+            className="cursor-default rounded px-3 py-2 outline-none data-[highlighted]:bg-muted data-[disabled]:opacity-50"
+          >
+            复制图片（含标注）
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            disabled={copying}
+            onSelect={() => void copy(false)}
+            className="cursor-default rounded px-3 py-2 outline-none data-[highlighted]:bg-muted data-[disabled]:opacity-50"
+          >
+            复制原图
+          </ContextMenu.Item>
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
+  );
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-3 text-xs">
@@ -131,42 +253,48 @@ export function FocusOverlay({
           </p>
         </div>
       )}
-      <div
-        className="relative w-full overflow-hidden rounded border"
-        style={{ maxWidth: screenshot.pixelWidth ?? undefined }}
-      >
-        <img
-          alt="目标应用窗口快照"
-          className="block h-auto w-full"
-          src={`data:image/png;base64,${screenshot.data}`}
-        />
-        {enabled &&
-          layers
-            .filter((layer) => mode === "both" || mode === layer.key)
-            .map(
-              (layer) =>
-                layer.box && (
-                  <div
-                    key={layer.key}
-                    data-bbox={layer.key}
-                    aria-label={`${layer.label}范围`}
-                    className="pointer-events-none absolute box-border border-2"
-                    style={{
-                      left: `${layer.box.left}%`,
-                      top: `${layer.box.top}%`,
-                      width: `${layer.box.width}%`,
-                      height: `${layer.box.height}%`,
-                      borderColor: layer.color,
-                      backgroundColor:
-                        layer.color +
-                        Math.round(opacity * 255)
-                          .toString(16)
-                          .padStart(2, "0"),
-                    }}
-                  />
-                ),
-            )}
-      </div>
+      <p className="text-xs text-muted-foreground">
+        点击图片放大，右键复制原图或当前标注图。
+      </p>
+      {imageView(false)}
+      <p role="status" className="text-xs">
+        {copying ? "正在复制…" : copyStatus}
+      </p>
+      <Dialog open={expanded} onOpenChange={setExpanded}>
+        <DialogContent className="flex h-[90vh] w-[95vw] max-w-none flex-col sm:max-w-none">
+          <DialogHeader>
+            <DialogTitle>截图预览</DialogTitle>
+            <DialogDescription>
+              滚动查看大图；右键可复制。按 Esc 关闭。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-center gap-3 text-sm">
+            <label>
+              缩放{" "}
+              <input
+                aria-label="图片缩放"
+                type="range"
+                min="0.5"
+                max="3"
+                step="0.25"
+                value={zoom}
+                onChange={(event) => setZoom(Number(event.target.value))}
+              />
+            </label>
+            <span>{Math.round(zoom * 100)}%</span>
+            <button
+              className="rounded border px-2 py-1"
+              onClick={() => setZoom(1)}
+            >
+              原始大小
+            </button>
+            <span role="status">{copying ? "正在复制…" : copyStatus}</span>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto rounded bg-muted/30 p-2">
+            {imageView(true)}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
