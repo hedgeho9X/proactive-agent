@@ -4,7 +4,11 @@ export interface ImageLayer {
   box: { left: number; top: number; width: number; height: number };
 }
 // 在原图分辨率合成当前标注，复制结果不依赖预览缩放比例。
-export async function screenshotPNG(data: string, layers: ImageLayer[]) {
+export async function screenshotPNG(
+  data: string,
+  layers: ImageLayer[],
+  point?: { left: number; top: number; color: string },
+) {
   const image = new Image();
   image.src = "data:image/png;base64," + data;
   await image.decode();
@@ -24,8 +28,22 @@ export async function screenshotPNG(data: string, layers: ImageLayer[]) {
     context.fillRect(x, y, w, h);
     context.globalAlpha = 1;
     context.strokeStyle = layer.color;
-    context.lineWidth = 2;
-    context.strokeRect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2));
+    context.lineWidth = 1;
+    context.strokeRect(x - 0.5, y - 0.5, w + 1, h + 1);
+  }
+  if (point) {
+    context.globalAlpha = 1;
+    context.strokeStyle = point.color;
+    context.lineWidth = 1;
+    context.beginPath();
+    context.arc(
+      (point.left * canvas.width) / 100,
+      (point.top * canvas.height) / 100,
+      6,
+      0,
+      Math.PI * 2,
+    );
+    context.stroke();
   }
   return canvas.toDataURL("image/png");
 }

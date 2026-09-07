@@ -23,6 +23,7 @@ final class InputWatch {
     }
     func receive(_ type: CGEventType, _ event: CGEvent) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput { emit(["type":"watch_error","reason":"event_tap_disabled"]); exit(1) }
+        if type == .keyDown && !shouldRecordKey(event.getIntegerValueField(.keyboardEventKeycode),flags:event.flags) { return }
         let receivedAt = Date()
         var target = NSWorkspace.shared.frontmostApplication
         var targetBasis = "frontmost_at_event"
@@ -36,7 +37,7 @@ final class InputWatch {
             } else { targetBasis = "frontmost_hit_test_unavailable" }
         }
         guard let app = target, app.processIdentifier != getppid(), app.processIdentifier != getpid(), app.bundleIdentifier != "io.github.hedgeho9x.proactive-agent" else { return }
-        let keyNames: [Int64:String] = [0:"A",1:"S",2:"D",3:"F",4:"H",5:"G",6:"Z",7:"X",8:"C",9:"V",11:"B",12:"Q",13:"W",14:"E",15:"R",16:"Y",17:"T",18:"1",19:"2",20:"3",21:"4",22:"6",23:"5",24:"=",25:"9",26:"7",27:"-",28:"8",29:"0",30:"]",31:"O",32:"U",33:"[",34:"I",35:"P",36:"Enter",37:"L",38:"J",39:"Quote",40:"K",41:";",42:"Backslash",43:",",44:"/",45:"N",46:"M",47:".",48:"Tab",49:"Space",50:"Backquote",51:"Backspace",53:"Escape",55:"Command",56:"Shift",57:"CapsLock",58:"Option",59:"Control",60:"RightShift",61:"RightOption",62:"RightControl",63:"Fn",76:"NumpadEnter",96:"F5",97:"F6",98:"F7",99:"F3",100:"F8",101:"F9",103:"F11",109:"F10",111:"F12",115:"Home",116:"PageUp",117:"Delete",118:"F4",119:"End",120:"F2",121:"PageDown",122:"F1",123:"Left",124:"Right",125:"Down",126:"Up"]
+        let keyNames: [Int64:String] = [0:"A",1:"S",2:"D",3:"F",4:"H",5:"G",6:"Z",7:"X",8:"C",9:"V",11:"B",12:"Q",13:"W",14:"E",15:"R",16:"Y",17:"T",18:"1",19:"2",20:"3",21:"4",22:"6",23:"5",24:"=",25:"9",26:"7",27:"-",28:"8",29:"0",30:"]",31:"O",32:"U",33:"[",34:"I",35:"P",36:"Enter",37:"L",38:"J",39:"Quote",40:"K",41:";",42:"Backslash",43:",",44:"/",45:"N",46:"M",47:".",48:"Tab",49:"Space",50:"Backquote",51:"Backspace",53:"Escape",55:"Command",56:"Shift",57:"CapsLock",58:"Option",59:"Control",60:"RightShift",61:"RightOption",62:"RightControl",63:"Fn",76:"NumpadEnter",82:"Numpad0",83:"Numpad1",84:"Numpad2",85:"Numpad3",86:"Numpad4",87:"Numpad5",88:"Numpad6",89:"Numpad7",91:"Numpad8",92:"Numpad9",96:"F5",97:"F6",98:"F7",99:"F3",100:"F8",101:"F9",103:"F11",109:"F10",111:"F12",115:"Home",116:"PageUp",117:"Delete",118:"F4",119:"End",120:"F2",121:"PageDown",122:"F1",123:"Left",124:"Right",125:"Down",126:"Up"]
         let keyboard = type == .keyDown || type == .keyUp || type == .flagsChanged
         let code = event.getIntegerValueField(.keyboardEventKeycode)
         var modifiers = [String]()

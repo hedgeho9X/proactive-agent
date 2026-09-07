@@ -19,6 +19,11 @@ export function canonicalAX(value: any): string {
 }
 export function comparisonIssue(before: any, after: any): string | null {
   if (!before || !after) return "选择两份快照后对比";
+  if (
+    before.alignment?.sameWindow === false ||
+    after.alignment?.sameWindow === false
+  )
+    return "AX 树与截图来自不同窗口，不能作可靠的图树对比";
   if (before.pid !== after.pid || before.bundleId !== after.bundleId)
     return "两份快照不属于同一应用进程，不能对比";
   if (

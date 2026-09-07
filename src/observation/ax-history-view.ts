@@ -1,6 +1,21 @@
 // 日常视图以一次按下或一次点击为单位，历史松开和修饰键仅作诊断保留。
 export function meaningfulAXEvent(item: any) {
-  return !item.trigger || ["key_down", "click"].includes(item.trigger.kind);
+  if (!item.trigger || item.trigger.kind === "click") return true;
+  if (item.trigger.kind !== "key_down") return false;
+  const modifiers = Array.isArray(item.trigger.modifiers)
+    ? item.trigger.modifiers
+    : [];
+  if (
+    modifiers.some((name: string) =>
+      ["Cmd", "Ctrl", "Option", "Fn"].includes(name),
+    )
+  )
+    return true;
+  const plain = /^[A-Z0-9]$|^Numpad[0-9]$/.test(item.trigger.key ?? "");
+  const legacyNumpad = [82, 83, 84, 85, 86, 87, 88, 89, 91, 92].includes(
+    item.trigger.keyCode,
+  );
+  return !plain && !legacyNumpad;
 }
 export function hasAXEvidence(item: any) {
   return (

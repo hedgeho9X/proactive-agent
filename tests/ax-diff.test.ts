@@ -17,6 +17,18 @@ test("应用级降级树不与窗口树混作同一范围", () => {
   );
 });
 
+test("图树窗口错位时明确阻止比较", () => {
+  const a = {
+    pid: 1,
+    bundleId: "fixture",
+    nodes: [],
+    alignment: { sameWindow: false },
+  };
+  expect(
+    comparisonIssue(a, { ...a, alignment: { sameWindow: true } }),
+  ).toContain("不同窗口");
+});
+
 test("Git式对齐保留插入行之后的相同行", () => {
   const rows = alignDiffLines(["a", "c"], ["a", "b", "c"]);
   expect(rows[1]).toMatchObject({ left: undefined, right: "b", rightLine: 2 });

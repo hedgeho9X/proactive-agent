@@ -38,7 +38,7 @@ func probeFocusRegions(_ application: AXUIElement) -> FocusRegionProbe {
             if result == .success, let rectangle, CFGetTypeID(rectangle) == AXValueGetTypeID(), AXValueGetType(rectangle as! AXValue) == .cgRect {
                 var rect = CGRect.zero
                 AXValueGetValue(rectangle as! AXValue,.cgRect,&rect)
-                selection = ["status":"available","rect":regionRect(rect),"range":["location":range.location,"length":range.length],"source":"AXBoundsForRange","shape":"bounding_rectangle"]
+                selection = rect.width > 0 && rect.height > 0 ? ["status":"available","rect":regionRect(rect),"range":["location":range.location,"length":range.length],"source":"AXBoundsForRange","shape":"bounding_rectangle"] : ["status":"unavailable","reason":"empty_selection_bounds"]
             } else { selection = ["status":"unavailable","code":result.rawValue,"reason":"selection_bounds_unavailable"] }
         }
     } else { selection = ["status":"unavailable","code":rangeError.rawValue,"reason":"selected_range_unavailable"] }

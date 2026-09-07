@@ -11,6 +11,7 @@ struct CapturedEvidence {
     var focus: FocusRegionProbe?
     var click: FocusRegionProbe?
     var windowId: UInt32?
+    var axWindow: AXUIElement?
 }
 // 与 AX 全树遍历并行执行，截图不再等待整棵树返回。
 func captureEventEvidence(_ pid: pid_t, trigger: [String:Any]?, requested: @Sendable () -> Void = {}) async -> CapturedEvidence {
@@ -29,6 +30,7 @@ func captureEventEvidence(_ pid: pid_t, trigger: [String:Any]?, requested: @Send
         }
         guard matches.count == 1, let target = matches.first else { result.screenshot = ["status":"unavailable","reason":"window_match_ambiguous_or_missing","candidates":matches.count]; return result }
         result.windowId = target.windowID
+        result.axWindow = window
         let focusBefore = probeFocusRegions(application), clickBefore = probeClickRegion(pid,trigger)
         result.focus = focusBefore; result.click = clickBefore
         let sampledAt = preciseTimestamp()
@@ -49,6 +51,16 @@ func captureEventEvidence(_ pid: pid_t, trigger: [String:Any]?, requested: @Send
             if !stableFocusRegions(focusBefore,focusAfter), focusBefore.element != nil { regions["selection"] = ["status":"unavailable","reason":"selection_changed"] }
             regions["click"] = clickBefore.regions["click"]
             if clickBefore.element != nil && !stableFocusControl(clickBefore,clickAfter) { regions["click"] = ["status":"unavailable","reason":"hit_target_changed"] }
+        }
+        // 弹窗可能在并行查询期间出现，不能把它的控件框画到旧主窗口上。
+        for (name,probe) in [("focus",focusBefore),("selection",focusBefore),("click",clickBefore)] {
+            guard let element = probe.element, let current = regions[name] as? [String:Any], current["status"] as? String == "available" else { continue }
+            let role = attribute(element,kAXRoleAttribute) as? String
+            let ownerValue = role == "AXWindow" ? element : attribute(element,kAXWindowAttribute)
+            let owner = ownerValue.flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil }
+            if let owner, let window {
+                if !CFEqual(owner,window) { regions[name] = ["status":"unavailable","reason":"region_window_mismatch"] }
+            } else { regions[name] = ["status":"unavailable","reason":"region_window_unverified"] }
         }
         guard let png = NSBitmapImageRep(cgImage:image).representation(using:.png,properties:[:]) else { result.screenshot=["status":"error","reason":"png_encoding_failed"];return result }
         result.screenshot = ["status":"captured","data":png.base64EncodedString(),"selection":expected == nil ? "single_window_fallback":"ax_bounds","requestedAt":preciseTimestamp(requestTime),"capturedAt":preciseTimestamp(completeTime),"regionsSampledAt":sampledAt,"frame":regionRect(target.frame),"pixelWidth":image.width,"pixelHeight":image.height,"coordinateSpace":"screen_top_left_points","shadowsExcluded":true,"regions":regions,"nonAtomic":true]

@@ -1,5 +1,14 @@
 import { test, expect } from "bun:test";
-import { projectBBox } from "../src/renderer/bbox.ts";
+import { projectBBox, projectPoint } from "../src/renderer/bbox.ts";
+
+test("点击点使用原始事件坐标，窗口外不伪造点位", () => {
+  expect(
+    projectPoint(150, 75, { x: 100, y: 50, width: 200, height: 100 }),
+  ).toEqual({ left: 25, top: 25 });
+  expect(
+    projectPoint(0, 0, { x: 100, y: 50, width: 200, height: 100 }),
+  ).toBeNull();
+});
 
 test("bbox转换使用窗口坐标及比例，支持负坐标多屏、裁剪和无效输入", () => {
   expect(

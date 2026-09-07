@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { projectBBox } from "./bbox.ts";
+import { projectBBox, projectPoint } from "./bbox.ts";
 import { ContextMenu } from "radix-ui";
 import {
   Dialog,
@@ -15,16 +15,24 @@ const reason = (item: any) =>
     ? "本次不是点击事件"
     : item?.status === "no_selection"
       ? "只有光标，没有文字选区"
-      : (item?.reason ?? "应用未提供范围");
+      : ({
+          region_window_mismatch: "控件属于另一窗口，未叠加",
+          region_window_unverified: "无法确认控件所属窗口，未叠加",
+          empty_selection_bounds: "应用返回了空的选区范围",
+        }[item?.reason as string] ??
+        item?.reason ??
+        "应用未提供范围");
 export function FocusOverlay({
   screenshot,
+  trigger,
   onSelectNode,
 }: {
   screenshot: any;
+  trigger?: any;
   onSelectNode?: (id: string) => void;
 }) {
   const [enabled, setEnabled] = useState(true);
-  const [opacity, setOpacity] = useState(0.22);
+  const [opacity, setOpacity] = useState(0);
   const [focusColor, setFocusColor] = useState("#3b82f6");
   const [selectionColor, setSelectionColor] = useState("#f59e0b");
   const [clickColor, setClickColor] = useState("#10b981");
@@ -37,6 +45,10 @@ export function FocusOverlay({
   const mapped =
     screenshot.coordinateSpace === "screen_top_left_points" &&
     screenshot.shadowsExcluded === true;
+  const clickPoint =
+    mapped && trigger?.kind === "click"
+      ? projectPoint(trigger.x, trigger.y, screenshot.frame)
+      : null;
   const layers = [
     { key: "focus", label: "焦点控件", color: focusColor },
     { key: "selection", label: "文字选区", color: selectionColor },
@@ -59,8 +71,27 @@ export function FocusOverlay({
             )
             .map((layer) => ({ box: layer.box!, color: layer.color, opacity }))
         : [];
+      // 相同范围只画一次，优先保留点击颜色，避免重复填色加深。
+      const unique = visible.filter(
+        (layer, index) =>
+          !visible
+            .slice(index + 1)
+            .some((other) =>
+              ["left", "top", "width", "height"].every(
+                (key) =>
+                  Math.abs((layer.box as any)[key] - (other.box as any)[key]) <
+                  0.001,
+              ),
+            ),
+      );
       const dataUrl = annotated
-        ? await screenshotPNG(screenshot.data, visible)
+        ? await screenshotPNG(
+            screenshot.data,
+            unique,
+            enabled && clickPoint && (mode === "both" || mode === "click")
+              ? { ...clickPoint, color: clickColor }
+              : undefined,
+          )
         : "data:image/png;base64," + screenshot.data;
       await window.proactive.invoke("ax.copyImage", { dataUrl });
       setCopyStatus(annotated ? "已复制图片（含当前标注）" : "已复制原图");
@@ -113,18 +144,31 @@ export function FocusOverlay({
               .filter((layer) => mode === "both" || mode === layer.key)
               .map(
                 (layer) =>
-                  layer.box && (
+                  layer.box &&
+                  !layers
+                    .slice(layers.indexOf(layer) + 1)
+                    .some(
+                      (other) =>
+                        other.box &&
+                        (mode === "both" || mode === other.key) &&
+                        ["left", "top", "width", "height"].every(
+                          (key) =>
+                            Math.abs(
+                              (layer.box as any)[key] - (other.box as any)[key],
+                            ) < 0.001,
+                        ),
+                    ) && (
                     <div
                       key={layer.key}
                       data-bbox={layer.key}
                       aria-label={`${layer.label}范围`}
-                      className="pointer-events-none absolute box-border border-2"
+                      className="pointer-events-none absolute box-border"
                       style={{
                         left: `${layer.box.left}%`,
                         top: `${layer.box.top}%`,
                         width: `${layer.box.width}%`,
                         height: `${layer.box.height}%`,
-                        borderColor: layer.color,
+                        boxShadow: `0 0 0 1px ${layer.color}`,
                         backgroundColor:
                           layer.color +
                           Math.round(opacity * 255)
@@ -134,6 +178,20 @@ export function FocusOverlay({
                     />
                   ),
               )}
+          {enabled && clickPoint && (mode === "both" || mode === "click") && (
+            <div
+              data-click-point
+              aria-label="事件点击位置"
+              className="pointer-events-none absolute h-3 w-3 rounded-full"
+              style={{
+                left: `${clickPoint.left}%`,
+                top: `${clickPoint.top}%`,
+                transform: "translate(-50%, -50%)",
+                boxShadow: `0 0 0 1px ${clickColor}`,
+                background: "transparent",
+              }}
+            />
+          )}
         </div>
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
@@ -179,7 +237,7 @@ export function FocusOverlay({
           <option value="click">仅点击命中</option>
         </select>
         <label className="flex items-center gap-1">
-          透明度{" "}
+          填充强度{" "}
           <input
             aria-label="bbox 透明度"
             type="range"
@@ -189,7 +247,7 @@ export function FocusOverlay({
             value={opacity}
             onChange={(e) => setOpacity(Number(e.target.value))}
           />
-          {Math.round(opacity * 100)}%
+          {Math.round(opacity * 100)}%（0 为仅轮廓）
         </label>
         <label className="flex items-center gap-1">
           焦点颜色
@@ -245,10 +303,14 @@ export function FocusOverlay({
                     "查看节点"}
                 </button>
               )}
+              {layer.box && layer.box.width * layer.box.height > 6000 && (
+                <span> · 范围较粗，覆盖大部分窗口</span>
+              )}
             </p>
           ))}
           <p>
-            焦点表示键盘输入控件，绿色表示点击位置命中的控件，文字选区为外接矩形。区域采样：
+            默认不填色，轮廓画在范围外侧。绿色空心圈是事件点击坐标，绿色框是 AX
+            返回的命中控件范围；大框不代表精确到文字。区域采样：
             {screenshot.regionsSampledAt ?? "未记录"}。颜色不修改原图。
           </p>
         </div>

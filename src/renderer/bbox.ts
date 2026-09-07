@@ -4,6 +4,22 @@ export interface Rect {
   width: number;
   height: number;
 }
+export function projectPoint(x: number, y: number, frame: Rect | undefined) {
+  if (
+    !frame ||
+    ![x, y, frame.x, frame.y, frame.width, frame.height].every(
+      Number.isFinite,
+    ) ||
+    frame.width <= 0 ||
+    frame.height <= 0
+  )
+    return null;
+  const left = (100 * (x - frame.x)) / frame.width,
+    top = (100 * (y - frame.y)) / frame.height;
+  return left >= 0 && left <= 100 && top >= 0 && top <= 100
+    ? { left, top }
+    : null;
+}
 const valid = (r: Rect | undefined): r is Rect =>
   !!r &&
   [r.x, r.y, r.width, r.height].every(Number.isFinite) &&

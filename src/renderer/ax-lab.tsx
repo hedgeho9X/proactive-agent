@@ -3,7 +3,11 @@ import { attributeText, diffAX } from "./ax-diff.ts";
 import { Button } from "@/components/ui/button";
 import { AXDiffView } from "./ax-diff-view.tsx";
 import { FocusOverlay } from "./focus-overlay.tsx";
-import { hasAXEvidence, eventOrder } from "../observation/ax-history-view.ts";
+import {
+  hasAXEvidence,
+  eventOrder,
+  meaningfulAXEvent,
+} from "../observation/ax-history-view.ts";
 
 // 历史快照由主进程持久化；面板仅加载当前快照和对比基线。
 export function AXLab() {
@@ -22,7 +26,7 @@ export function AXLab() {
   });
   const [eventFilter, setEventFilter] = useState("");
   const [history, setHistory] = useState<any[]>([]);
-  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [showDiagnostics, setShowDiagnostics] = useState(true);
   const [baselineMissing, setBaselineMissing] = useState(0);
   const [notice, setNotice] = useState("");
   // 先打开事件、后完成采集时自动回填当前详情，不要求用户切换历史项。
@@ -133,8 +137,8 @@ export function AXLab() {
     }
   };
   const node = snapshot?.nodes.find((item: any) => item.id === selected);
-  const visibleHistory = history.filter(
-    (item) => showDiagnostics || hasAXEvidence(item),
+  const visibleHistory = history.filter((item) =>
+    showDiagnostics ? meaningfulAXEvent(item) : hasAXEvidence(item),
   );
   const differences = diffAX(before, snapshot);
   const eventLabel = (item: any) =>
@@ -171,7 +175,8 @@ export function AXLab() {
             {recording.state} · 本轮 {recording.count} 条 {recording.reason}
           </span>
           <span className="text-xs text-muted-foreground">
-            跟随前台应用，排除自身；每次点击或按键按下只记一条，组合键附带修饰键。无倒计时，不记录滚动。
+            记录点击、操作键和组合键；过滤普通字母、数字（含 Shift 大写）。保留
+            Cmd/Ctrl/Option/Fn 组合，排除自身，不记录滚动。
           </span>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -258,8 +263,8 @@ export function AXLab() {
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
           <span>
-            有证据 {history.filter(hasAXEvidence).length} 条 / 全部{" "}
-            {history.length} 条
+            操作 {history.filter(meaningfulAXEvent).length} 条 / 有证据{" "}
+            {history.filter(hasAXEvidence).length} 条
           </span>
           <label className="flex items-center gap-1 text-xs">
             <input
@@ -267,7 +272,7 @@ export function AXLab() {
               checked={showDiagnostics}
               onChange={(e) => setShowDiagnostics(e.target.checked)}
             />
-            包含未采集／旧按键事件（诊断）
+            包含未采到证据的操作
           </label>
           <select
             aria-label="历史快照"
@@ -361,6 +366,12 @@ export function AXLab() {
             事件：{eventLabel(snapshot)} · 发生 {snapshot.trigger.occurredAt} ·
             采集 {snapshot.capturedAt} · 状态 {snapshot.captureStatus}{" "}
             {snapshot.captureError}。按键名表示物理键，不等于输入法最终文本。
+          </p>
+        )}
+        {snapshot?.alignment?.sameWindow === false && (
+          <p className="mt-2 text-sm text-amber-700">
+            此条 AX
+            树与截图来自不同窗口（可能在打开/关闭弹窗）。证据已保留，但不能当成同一画面理解。
           </p>
         )}
         {snapshot?.timing && (
@@ -580,6 +591,7 @@ export function AXLab() {
                 {snapshot.screenshot.data && (
                   <FocusOverlay
                     screenshot={snapshot.screenshot}
+                    trigger={snapshot.trigger}
                     onSelectNode={(id) => {
                       setSelected(id);
                       setTab("attributes");
