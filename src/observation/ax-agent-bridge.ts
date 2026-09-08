@@ -1,0 +1,114 @@
+import { createHash } from "node:crypto";
+import { filterAX } from "./filter.ts";
+// 按需适配已有快照，不再复制一份截图进另一套数据库。
+export function axObservation(snapshot: any) {
+  const event = snapshot.trigger ?? {};
+  const id = snapshot.snapshotId;
+  const at = snapshot.capturedAt ?? event.occurredAt ?? snapshot.savedAt;
+  const text = (node: any, name: string) =>
+    node.attributes?.[name]?.value?.text;
+  const nodes = (snapshot.nodes ?? []).map((node: any) => ({
+    node_id: node.id,
+    parent_id: node.parent ?? null,
+    role: text(node, "AXRole"),
+    title: text(node, "AXTitle"),
+    value: text(node, "AXValue"),
+    description: text(node, "AXDescription"),
+    focused: node.id === snapshot.focusId,
+    clicked: node.id === snapshot.clickedId,
+    protected: !!node.protected,
+  }));
+  const filtered = filterAX(nodes);
+  const artifact = (kind: string, content: any, bytes?: string) => ({
+    id: `${id}:${kind}`,
+    kind,
+    captured: Date.parse(at),
+    hash: createHash("sha256")
+      .update(bytes ?? JSON.stringify(content))
+      .digest("hex"),
+    payload: { content },
+    bytes,
+  });
+  return {
+    action: {
+      schema_version: "1",
+      action_id: id,
+      capture_session_id: event.session ?? "ax",
+      collector_epoch: event.session ?? "ax",
+      source_sequence: String(event.sequence ?? 0),
+      occurred_at: event.occurredAt ?? at,
+      received_at: snapshot.savedAt ?? at,
+      monotonic_ns: event.monotonicNs ?? "0",
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      kind: event.kind ?? "manual_snapshot",
+      actor: "unknown",
+      origin: "native_observation",
+      trust_class: "untrusted_observation",
+      app: {
+        pid: snapshot.pid,
+        bundle_id: snapshot.bundleId,
+        name: snapshot.app,
+      },
+      window: { id: snapshot.windowId },
+      input: {
+        key_name: event.key,
+        key_category: "special",
+        modifiers: event.modifiers ?? [],
+      },
+      policy_status: "allowed",
+      reason_codes: [],
+    },
+    activity_id: id,
+    revision: 1,
+    evidence: [
+      {
+        kind: "ax",
+        slot: "ax",
+        status: nodes.length ? "captured" : "unavailable",
+        reason: nodes.length ? null : "ax_unavailable",
+      },
+      {
+        kind: "screenshot",
+        slot: "screenshot",
+        status: snapshot.screenshot?.data ? "captured" : "unavailable",
+        reason: snapshot.screenshot?.data
+          ? null
+          : (snapshot.screenshot?.reason ?? "screenshot_unavailable"),
+      },
+      {
+        kind: "ocr",
+        slot: "ocr",
+        status: "unavailable",
+        reason: "ocr_not_collected",
+      },
+      {
+        kind: "screenshot",
+        slot: "screenshot_before",
+        status: "unavailable",
+        reason: "before_frame_not_collected",
+      },
+    ],
+    artifacts: {
+      ax: nodes.length
+        ? artifact("ax", {
+            nodes: filtered.normalized,
+            context: filtered,
+            coverage: { partial: !!snapshot.partial, timing: snapshot.timing },
+            regions: snapshot.screenshot?.regions,
+          })
+        : null,
+      screenshot: snapshot.screenshot?.data
+        ? artifact(
+            "screenshot",
+            {
+              frame: snapshot.screenshot.frame,
+              regions: snapshot.screenshot.regions,
+            },
+            snapshot.screenshot.data,
+          )
+        : null,
+      ocr: null,
+      screenshot_before: null,
+    },
+  };
+}

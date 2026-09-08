@@ -7,12 +7,17 @@ export class AXRecorder {
   private child?: ChildProcessWithoutNullStreams;
   private jobs = new Set<Promise<void>>();
   private captureBusy = false;
+  private scope: { allApps: boolean; allowedBundleIds: string[] } = {
+    allApps: true,
+    allowedBundleIds: [],
+  };
   private current = { state: "stopped", reason: "", count: 0 };
   constructor(
     private binary: string,
     private history: AXHistory,
     private inspect: (event: any) => Promise<any>,
     private changed: () => void,
+    private completed?: (snapshot: any) => Promise<void>,
   ) {}
   status() {
     return { ...this.current, pending: this.jobs.size };
@@ -23,6 +28,11 @@ export class AXRecorder {
       !Number.isInteger(event.pid)
     )
       throw new Error("invalid_input_event");
+    if (
+      !this.scope.allApps &&
+      !this.scope.allowedBundleIds.includes(event.bundleId)
+    )
+      return;
     const captures = ["click", "key_down"].includes(event.kind);
     // 防御旧监听协议，松开及修饰键不再生成空快照记录。
     if (!captures) return;
@@ -59,13 +69,23 @@ export class AXRecorder {
         if (outcome.error) throw new Error("inspection_failed");
         const result = outcome.result;
         const failed = !!result.error;
-        await this.history.update(event.id, {
+        const saved = await this.history.update(event.id, {
           ...result,
           nodes: result.nodes ?? [],
           trigger: event,
           captureStatus: failed ? "failed" : "captured",
           captureError: failed ? result.error : undefined,
         });
+        if (!failed && this.completed) {
+          // Agent 路由失败不能把成功截图改成采集失败，也不能停止输入监听。
+          try {
+            await this.completed(saved);
+          } catch {
+            await this.history.update(event.id, {
+              routing: { status: "failed", reason: "routing_failed" },
+            });
+          }
+        }
       } catch {
         await this.history.update(event.id, {
           captureStatus: "failed",
@@ -81,8 +101,13 @@ export class AXRecorder {
       if (captureStatus === "pending") this.captureBusy = false;
     }
   }
-  async start() {
+  async start(scope?: { allApps: boolean; allowedBundleIds: string[] }) {
     if (this.child || this.jobs.size) return this.status();
+    if (scope) {
+      if (!scope.allApps && !scope.allowedBundleIds.length)
+        throw new Error("explicit_allowlist_required");
+      this.scope = scope;
+    } else this.scope = { allApps: true, allowedBundleIds: [] };
     this.current = { state: "starting", reason: "", count: 0 };
     const child = spawn(this.binary, ["--watch-input"], {
       stdio: ["pipe", "pipe", "pipe"],

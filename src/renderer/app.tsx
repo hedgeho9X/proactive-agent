@@ -1,5 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { AXLab } from "./ax-lab.tsx";
+import { AXRecordDetails } from "./ax-record-details.tsx";
+import { FocusOverlay } from "./focus-overlay.tsx";
+import { projectAXRecords } from "./ax-stream.ts";
+import {
+  routingOptions,
+  defaultRouting,
+} from "../observation/routing-policy.ts";
 import { createRoot } from "react-dom/client";
 import {
   ArrowDown,
@@ -102,6 +108,7 @@ const statusNames: Record<string, string> = {
   stopping: "停止中",
   pending: "待采集",
   captured: "已采集",
+  skipped_busy: "采集繁忙",
   shared: "共享",
   excluded: "已排除",
   expired: "已过期",
@@ -419,7 +426,11 @@ function App() {
     modelRoles: {},
   });
   const [settings, setSettings] = useState(false);
-  const [page, setPage] = useState("feed");
+  const [axRecords, setAXRecords] = useState<any[]>([]);
+  const [eventFilter, setEventFilter] = useState("");
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [captureApps, setCaptureApps] = useState<any[]>([]);
+  const [manualPid, setManualPid] = useState("");
   const [selected, setSelected] = useState<StreamRow | null>(null);
   const [observation, setObservation] = useState<any>(null);
   const [busy, setBusy] = useState("");
@@ -462,6 +473,7 @@ function App() {
     try {
       await api.invoke(method, params);
       await refresh();
+      if (method.startsWith("ax.")) await refreshAXRecords();
       return true;
     } catch (e) {
       setError(String(e));
@@ -470,6 +482,31 @@ function App() {
       setBusy("");
     }
   }
+  async function refreshAXRecords() {
+    setAXRecords(await api.invoke("ax.history"));
+  }
+  useEffect(() => {
+    let active = true,
+      polling = false;
+    const tick = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const records = await api.invoke("ax.history");
+        if (active) setAXRecords(records);
+      } catch {
+        if (active) setError("读取本地记录失败");
+      } finally {
+        polling = false;
+      }
+    };
+    void tick();
+    const timer = setInterval(() => void tick(), 1000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
   useEffect(() => {
     void refresh();
     const unsubscribe = api.subscribe(() => {
@@ -521,9 +558,34 @@ function App() {
           : action.policy_status),
     };
   });
-  const rows = [...actions, ...projected].sort(
-    (a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0),
-  );
+  const axRows = projectAXRecords(axRecords).map((row) => ({
+    ...row,
+    text:
+      row.text +
+      (queue.get(row.id)?.status
+        ? ` · Agent ${statusText(queue.get(row.id).status)}`
+        : ""),
+  }));
+  const axIds = new Set(axRecords.map((record) => record.id));
+  const rows = [
+    ...actions.filter((row) => !axIds.has(row.id)),
+    ...projected,
+    ...axRows,
+  ]
+    .filter(
+      (row) =>
+        (sourceFilter === "all" ||
+          (sourceFilter === "evidence"
+            ? !!row.detail?.axRecord
+            : !row.detail?.axRecord)) &&
+        (!eventFilter ||
+          [row.label, row.text, row.id]
+            .join(" ")
+            .toLowerCase()
+            .includes(eventFilter.toLowerCase())),
+    )
+    .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0))
+    .slice(-500);
   const rowIdentity = rows
     .flatMap((row) => [
       row.id,
@@ -641,30 +703,7 @@ function App() {
   }
   return (
     <main className="flex h-full">
-      <nav
-        aria-label="功能导航"
-        className="flex w-36 shrink-0 flex-col gap-2 border-r p-3"
-      >
-        <span className="mb-3 text-sm font-semibold">Proactive Lab</span>
-        <Button
-          variant={page === "feed" ? "secondary" : "ghost"}
-          onClick={() => setPage("feed")}
-        >
-          观察与 Agent
-        </Button>
-        <Button
-          variant={page === "ax" ? "secondary" : "ghost"}
-          onClick={() => setPage("ax")}
-        >
-          AX 观测台
-        </Button>
-      </nav>
-      <div className={page === "ax" ? "min-w-0 flex-1" : "hidden"}>
-        <AXLab />
-      </div>
-      <div
-        className={page === "feed" ? "flex min-w-0 flex-1 flex-col" : "hidden"}
-      >
+      <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex h-10 shrink-0 items-center gap-3 px-4">
           <span className="text-xs font-medium">Proactive</span>
           <span className="text-xs text-muted-foreground">
@@ -678,6 +717,54 @@ function App() {
             <ArrowDown data-icon="inline-start" />
             {follow ? "跟随" : "恢复跟随"}
           </Button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 border-t px-4 py-2">
+          <Button
+            size="sm"
+            disabled={!!busy}
+            onClick={() =>
+              void act(
+                state.collector.state === "running"
+                  ? "capture.stop"
+                  : "capture.start",
+                { allApps, bundleIds },
+              )
+            }
+          >
+            {state.collector.state === "running" ? "停止观察" : "开始观察"}
+          </Button>
+          <Input
+            className="max-w-64"
+            aria-label="筛选事件"
+            placeholder="搜索应用、按键、ID…"
+            value={eventFilter}
+            onChange={(e) => setEventFilter(e.target.value)}
+          />
+          <select
+            aria-label="事件来源"
+            className="rounded border bg-background p-2 text-xs"
+            value={sourceFilter}
+            onChange={(e) => setSourceFilter(e.target.value)}
+          >
+            <option value="all">全部事件</option>
+            <option value="evidence">操作与证据</option>
+            <option value="agent">Agent 与历史观察</option>
+          </select>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={!!busy || state.collector.state === "running"}
+            onClick={() =>
+              void act("ax.clear").then((ok) => {
+                if (ok) setSelected(null);
+              })
+            }
+          >
+            清空本地记录
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            显示最近 500 条匹配记录；仅选中触发操作进入 Agent
+          </span>
         </div>
         <Separator />
         {error && (
@@ -780,7 +867,11 @@ function App() {
           }}
         >
           <SheetContent
-            className="w-full gap-0 sm:max-w-xl"
+            className={
+              currentRow?.detail?.axRecord
+                ? "w-[75vw] gap-0 sm:max-w-none"
+                : "w-full gap-0 sm:max-w-xl"
+            }
             // 详情保持展开，背景行可以继续切换；Esc 与关闭按钮仍沿用 Radix 行为。
             onInteractOutside={(event) => event.preventDefault()}
           >
@@ -791,253 +882,277 @@ function App() {
               </SheetDescription>
             </SheetHeader>
             <Separator />
-            <div className="min-h-0 flex-1 overflow-y-auto p-4">
-              <Tabs value={detailTab} onValueChange={setDetailTab}>
-                <TabsList variant="line" className="w-full">
-                  <TabsTrigger value="formatted">详情</TabsTrigger>
-                  {selected?.actionId && (
-                    <>
-                      <TabsTrigger value="ax">AX</TabsTrigger>
-                      <TabsTrigger value="image">图像 / OCR</TabsTrigger>
-                      <TabsTrigger value="understanding">理解</TabsTrigger>
-                    </>
-                  )}
-                  <TabsTrigger value="json">JSON</TabsTrigger>
-                </TabsList>
-                <TabsContent value="formatted" className="pt-4">
-                  {currentRow &&
-                    (observation ? (
-                      <div className="flex flex-col gap-4">
-                        <p className="detail-text">{currentRow.text}</p>
-                        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">
-                          <dt>Action</dt>
-                          <dd className="break-all">
-                            {observation.action.action_id}
-                          </dd>
-                          <dt>应用</dt>
-                          <dd>{observation.action.app?.bundle_id}</dd>
-                          <dt>时间</dt>
-                          <dd>{observation.action.occurred_at}</dd>
-                          <dt>Revision</dt>
-                          <dd>{observation.revision}</dd>
-                        </dl>
-                        <Separator />
-                        {observation.evidence.map((link: any) => (
-                          <div key={link.slot} className="flex flex-col gap-1">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs">{link.slot}</span>
-                              <Badge variant="outline">
-                                {statusText(link.status)}
-                              </Badge>
-                              <span className="text-xs text-muted-foreground">
-                                {link.delta_ms ?? "—"} ms
-                              </span>
+            {currentRow?.detail?.axRecord ? (
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <AXRecordDetails
+                  key={currentRow.id}
+                  recordId={currentRow.id}
+                  status={currentRow.detail.axRecord.captureStatus}
+                  aiStatus={queue.get(currentRow.id)?.status}
+                  aiReason={queue.get(currentRow.id)?.reason}
+                  recording={
+                    state.collector.state === "running" ||
+                    !!state.collector.pending
+                  }
+                  onRemoved={() => {
+                    setSelected(null);
+                    void refreshAXRecords();
+                  }}
+                />
+              </div>
+            ) : (
+              <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                <Tabs value={detailTab} onValueChange={setDetailTab}>
+                  <TabsList variant="line" className="w-full">
+                    <TabsTrigger value="formatted">详情</TabsTrigger>
+                    {selected?.actionId && (
+                      <>
+                        <TabsTrigger value="ax">AX</TabsTrigger>
+                        <TabsTrigger value="image">图像 / OCR</TabsTrigger>
+                        <TabsTrigger value="understanding">理解</TabsTrigger>
+                      </>
+                    )}
+                    <TabsTrigger value="json">JSON</TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="formatted" className="pt-4">
+                    {currentRow &&
+                      (observation ? (
+                        <div className="flex flex-col gap-4">
+                          <p className="detail-text">{currentRow.text}</p>
+                          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">
+                            <dt>Action</dt>
+                            <dd className="break-all">
+                              {observation.action.action_id}
+                            </dd>
+                            <dt>应用</dt>
+                            <dd>{observation.action.app?.bundle_id}</dd>
+                            <dt>时间</dt>
+                            <dd>{observation.action.occurred_at}</dd>
+                            <dt>Revision</dt>
+                            <dd>{observation.revision}</dd>
+                          </dl>
+                          <Separator />
+                          {observation.evidence.map((link: any) => (
+                            <div
+                              key={link.slot}
+                              className="flex flex-col gap-1"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs">{link.slot}</span>
+                                <Badge variant="outline">
+                                  {statusText(link.status)}
+                                </Badge>
+                                <span className="text-xs text-muted-foreground">
+                                  {link.delta_ms ?? "—"} ms
+                                </span>
+                              </div>
+                              {link.reason && (
+                                <p className="text-xs text-muted-foreground">
+                                  {link.reason}
+                                </p>
+                              )}
                             </div>
-                            {link.reason && (
+                          ))}
+                          {selectedQueue && (
+                            <RawSection
+                              value={selectedQueue}
+                              label="队列记录"
+                            />
+                          )}
+                        </div>
+                      ) : (
+                        <TraceDetail row={currentRow} />
+                      ))}
+                    {currentRow?.kind === "subagent" &&
+                      currentRow.detail?.taskId && (
+                        <FieldGroup className="mt-4 gap-3">
+                          <Field>
+                            <FieldLabel htmlFor="task-revision">
+                              修正任务
+                            </FieldLabel>
+                            <Input
+                              id="task-revision"
+                              value={revision}
+                              onChange={(e) => setRevision(e.target.value)}
+                            />
+                          </Field>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              disabled={!!busy || !revision.trim()}
+                              onClick={() =>
+                                void act("revise", {
+                                  taskId: currentRow.detail.taskId,
+                                  target: revision,
+                                })
+                              }
+                            >
+                              发送修正
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={!!busy}
+                              onClick={() =>
+                                void act("cancel", {
+                                  taskId: currentRow.detail.taskId,
+                                })
+                              }
+                            >
+                              取消任务
+                            </Button>
+                          </div>
+                        </FieldGroup>
+                      )}
+                  </TabsContent>
+                  <TabsContent value="ax" className="pt-4">
+                    <Tabs value={axView} onValueChange={setAXView}>
+                      <TabsList>
+                        <TabsTrigger value="context">Context</TabsTrigger>
+                        <TabsTrigger value="raw">Raw</TabsTrigger>
+                      </TabsList>
+                    </Tabs>
+                    <p className="my-3 text-xs text-muted-foreground">
+                      {nodes?.length ?? 0} nodes
+                    </p>
+                    {nodes?.length ? (
+                      <AXTree nodes={nodes} />
+                    ) : (
+                      <p className="text-sm text-muted-foreground">AX 不可用</p>
+                    )}
+                    <RawSection
+                      value={{
+                        coverage: ax?.coverage,
+                        policy: ax?.context?.policy_version,
+                        reasons: ax?.context?.reasons,
+                      }}
+                      label="Coverage / 过滤"
+                    />
+                  </TabsContent>
+                  <TabsContent value="image" className="pt-4">
+                    <div className="flex flex-col gap-4">
+                      {["screenshot", "screenshot_before"].map((slot) => {
+                        const artifact = observation?.artifacts?.[slot];
+                        const link = observation?.evidence?.find(
+                          (item: any) => item.slot === slot,
+                        );
+                        return (
+                          <section key={slot}>
+                            <h3 className="mb-2 text-xs text-muted-foreground">
+                              {slot === "screenshot" ? "After" : "Before"} ·{" "}
+                              {statusText(link?.status)} ·{" "}
+                              {link?.delta_ms ?? "—"} ms
+                            </h3>
+                            {artifact?.bytes ? (
+                              <FocusOverlay
+                                screenshot={{
+                                  ...artifact.payload?.metadata,
+                                  status: "captured",
+                                  data: artifact.bytes,
+                                }}
+                              />
+                            ) : (
                               <p className="text-xs text-muted-foreground">
-                                {link.reason}
+                                {link?.reason ?? "不可用"}
                               </p>
                             )}
-                          </div>
-                        ))}
-                        {selectedQueue && (
-                          <RawSection value={selectedQueue} label="队列记录" />
-                        )}
-                      </div>
-                    ) : (
-                      <TraceDetail row={currentRow} />
-                    ))}
-                  {currentRow?.kind === "subagent" &&
-                    currentRow.detail?.taskId && (
-                      <FieldGroup className="mt-4 gap-3">
-                        <Field>
-                          <FieldLabel htmlFor="task-revision">
-                            修正任务
-                          </FieldLabel>
-                          <Input
-                            id="task-revision"
-                            value={revision}
-                            onChange={(e) => setRevision(e.target.value)}
-                          />
-                        </Field>
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            disabled={!!busy || !revision.trim()}
-                            onClick={() =>
-                              void act("revise", {
-                                taskId: currentRow.detail.taskId,
-                                target: revision,
-                              })
-                            }
-                          >
-                            发送修正
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={!!busy}
-                            onClick={() =>
-                              void act("cancel", {
-                                taskId: currentRow.detail.taskId,
-                              })
-                            }
-                          >
-                            取消任务
-                          </Button>
-                        </div>
-                      </FieldGroup>
-                    )}
-                </TabsContent>
-                <TabsContent value="ax" className="pt-4">
-                  <Tabs value={axView} onValueChange={setAXView}>
-                    <TabsList>
-                      <TabsTrigger value="context">Context</TabsTrigger>
-                      <TabsTrigger value="raw">Raw</TabsTrigger>
-                    </TabsList>
-                  </Tabs>
-                  <p className="my-3 text-xs text-muted-foreground">
-                    {nodes?.length ?? 0} nodes
-                  </p>
-                  {nodes?.length ? (
-                    <AXTree nodes={nodes} />
-                  ) : (
-                    <p className="text-sm text-muted-foreground">AX 不可用</p>
-                  )}
-                  <RawSection
-                    value={{
-                      coverage: ax?.coverage,
-                      policy: ax?.context?.policy_version,
-                      reasons: ax?.context?.reasons,
-                    }}
-                    label="Coverage / 过滤"
-                  />
-                </TabsContent>
-                <TabsContent value="image" className="pt-4">
-                  <div className="flex flex-col gap-4">
-                    {["screenshot", "screenshot_before"].map((slot) => {
-                      const artifact = observation?.artifacts?.[slot];
-                      const link = observation?.evidence?.find(
-                        (item: any) => item.slot === slot,
-                      );
-                      return (
-                        <section key={slot}>
-                          <h3 className="mb-2 text-xs text-muted-foreground">
-                            {slot === "screenshot" ? "After" : "Before"} ·{" "}
-                            {statusText(link?.status)} · {link?.delta_ms ?? "—"}{" "}
-                            ms
-                          </h3>
-                          {artifact?.bytes ? (
-                            <img
-                              className="w-full rounded-md border"
-                              src={"data:image/png;base64," + artifact.bytes}
-                              alt={
-                                slot === "screenshot"
-                                  ? "动作后截图"
-                                  : "动作前缓存截图"
-                              }
-                            />
-                          ) : (
-                            <p className="text-xs text-muted-foreground">
-                              {link?.reason ?? "不可用"}
-                            </p>
-                          )}
-                        </section>
-                      );
-                    })}
-                    <Separator />
-                    <h3 className="text-xs text-muted-foreground">OCR</h3>
-                    <p className="detail-text">
-                      {observation?.artifacts?.ocr?.payload?.content?.blocks
-                        ?.map((block: any) => block.text)
-                        .join("\n") ?? "不可用"}
-                    </p>
-                    <RawSection
-                      value={observation?.artifacts?.ocr?.payload}
-                      label="OCR 位置与置信度"
-                    />
-                  </div>
-                </TabsContent>
-                <TabsContent value="understanding" className="pt-4">
-                  <div className="flex flex-col gap-4">
-                    <Badge variant="outline">
-                      {statusText(selectedQueue?.status ?? "queued")}
-                    </Badge>
-                    <p className="detail-text">
-                      {concise(
-                        observation?.understanding?.result ??
-                          observation?.understanding,
-                      ) || "待处理"}
-                    </p>
-                    {observation?.understanding?.result?.uncertainty && (
-                      <p className="detail-text text-muted-foreground">
-                        {observation.understanding.result.uncertainty}
+                          </section>
+                        );
+                      })}
+                      <Separator />
+                      <h3 className="text-xs text-muted-foreground">OCR</h3>
+                      <p className="detail-text">
+                        {observation?.artifacts?.ocr?.payload?.content?.blocks
+                          ?.map((block: any) => block.text)
+                          .join("\n") ?? "不可用"}
                       </p>
-                    )}
-                    {selectedQueue?.reason && (
-                      <p className="text-xs text-muted-foreground">
-                        {selectedQueue.reason}
-                      </p>
-                    )}
-                    <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        disabled={
-                          !!busy ||
-                          !state.modelRoles?.understanding?.hasKey ||
-                          !observation
-                        }
-                        onClick={() =>
-                          void act("summarize", {
-                            actionId: selected?.actionId,
-                            view: axView,
-                          })
-                        }
-                      >
-                        重新理解
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={!!busy || !selectedQueue}
-                        onClick={() =>
-                          void act("retry", { actionId: selected?.actionId })
-                        }
-                      >
-                        <RotateCcw data-icon="inline-start" />
-                        重试队列
-                      </Button>
+                      <RawSection
+                        value={observation?.artifacts?.ocr?.payload}
+                        label="OCR 位置与置信度"
+                      />
                     </div>
-                    <RawSection
-                      value={observation?.understanding}
-                      label="证据 / 模型 / 用量"
-                    />
-                  </div>
-                </TabsContent>
-                <TabsContent value="json" className="pt-4">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="mb-2"
-                    onClick={() =>
-                      void navigator.clipboard
-                        .writeText(
-                          JSON.stringify(
-                            observation ?? currentRow?.detail,
-                            null,
-                            2,
-                          ),
-                        )
-                        .catch((e) => setError(String(e)))
-                    }
-                  >
-                    <Copy data-icon="inline-start" />
-                    复制
-                  </Button>
-                  <JSONView value={observation ?? currentRow?.detail} />
-                </TabsContent>
-              </Tabs>
-            </div>
+                  </TabsContent>
+                  <TabsContent value="understanding" className="pt-4">
+                    <div className="flex flex-col gap-4">
+                      <Badge variant="outline">
+                        {statusText(selectedQueue?.status ?? "queued")}
+                      </Badge>
+                      <p className="detail-text">
+                        {concise(
+                          observation?.understanding?.result ??
+                            observation?.understanding,
+                        ) || "待处理"}
+                      </p>
+                      {observation?.understanding?.result?.uncertainty && (
+                        <p className="detail-text text-muted-foreground">
+                          {observation.understanding.result.uncertainty}
+                        </p>
+                      )}
+                      {selectedQueue?.reason && (
+                        <p className="text-xs text-muted-foreground">
+                          {selectedQueue.reason}
+                        </p>
+                      )}
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          disabled={
+                            !!busy ||
+                            !state.modelRoles?.understanding?.hasKey ||
+                            !observation
+                          }
+                          onClick={() =>
+                            void act("summarize", {
+                              actionId: selected?.actionId,
+                              view: axView,
+                            })
+                          }
+                        >
+                          重新理解
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={!!busy || !selectedQueue}
+                          onClick={() =>
+                            void act("retry", { actionId: selected?.actionId })
+                          }
+                        >
+                          <RotateCcw data-icon="inline-start" />
+                          重试队列
+                        </Button>
+                      </div>
+                      <RawSection
+                        value={observation?.understanding}
+                        label="证据 / 模型 / 用量"
+                      />
+                    </div>
+                  </TabsContent>
+                  <TabsContent value="json" className="pt-4">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="mb-2"
+                      onClick={() =>
+                        void navigator.clipboard
+                          .writeText(
+                            JSON.stringify(
+                              observation ?? currentRow?.detail,
+                              null,
+                              2,
+                            ),
+                          )
+                          .catch((e) => setError(String(e)))
+                      }
+                    >
+                      <Copy data-icon="inline-start" />
+                      复制
+                    </Button>
+                    <JSONView value={observation ?? currentRow?.detail} />
+                  </TabsContent>
+                </Tabs>
+              </div>
+            )}
           </SheetContent>
         </Sheet>
         <Dialog open={settings} onOpenChange={setSettings}>
@@ -1067,6 +1182,83 @@ function App() {
                 </TabsContent>
               ))}
             </Tabs>
+            <Separator />
+            <FieldGroup className="gap-3">
+              <FieldLabel>哪些操作交给 Agent</FieldLabel>
+              <p className="text-xs text-muted-foreground">
+                默认 Enter 和空格；采到有效证据后调用屏幕理解，再交给主
+                Agent。需要配置两者的模型和
+                Key；操作键只是关注信号，不等于已提交成功。
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {routingOptions.map((option) => (
+                  <label
+                    key={option.id}
+                    className="flex items-center gap-2 text-sm"
+                  >
+                    <input
+                      type="checkbox"
+                      disabled={!!busy}
+                      checked={(state.routing ?? defaultRouting).includes(
+                        option.id,
+                      )}
+                      onChange={(e) =>
+                        void act("routing.update", {
+                          triggers: e.target.checked
+                            ? [...(state.routing ?? defaultRouting), option.id]
+                            : (state.routing ?? defaultRouting).filter(
+                                (id: string) => id !== option.id,
+                              ),
+                        })
+                      }
+                    />
+                    {option.label}
+                  </label>
+                ))}
+              </div>
+            </FieldGroup>
+            <Separator />
+            <FieldGroup className="gap-2">
+              <FieldLabel>手动采集一次（仅保存证据）</FieldLabel>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!!busy}
+                onClick={async () => {
+                  try {
+                    setCaptureApps((await api.invoke("ax.apps")).apps);
+                  } catch {
+                    setError("无法读取应用列表");
+                  }
+                }}
+              >
+                刷新应用列表
+              </Button>
+              <select
+                aria-label="手动采集目标应用"
+                className="rounded border bg-background p-2 text-sm"
+                value={manualPid}
+                onChange={(e) => setManualPid(e.target.value)}
+              >
+                <option value="">选择应用</option>
+                {captureApps.map((item) => (
+                  <option key={item.pid} value={item.pid}>
+                    {item.name} · {item.pid}
+                  </option>
+                ))}
+              </select>
+              <Button
+                size="sm"
+                disabled={
+                  !!busy || !manualPid || state.collector.state === "running"
+                }
+                onClick={() =>
+                  void act("ax.inspect", { pid: Number(manualPid) })
+                }
+              >
+                立即采集
+              </Button>
+            </FieldGroup>
             <Separator />
             <FieldGroup className="gap-3">
               <Field className="gap-2">

@@ -19,6 +19,9 @@ export class ActionQueue {
       understand: (item: any) => Promise<any>;
       deliver: (id: string, result: any) => Promise<any>;
       change: () => void;
+      filter?: (
+        actionId: string,
+      ) => string | undefined | Promise<string | undefined>;
     },
   ) {
     this.db = new DatabaseSync(path);
@@ -97,10 +100,15 @@ export class ActionQueue {
           .get(...statuses) as any;
         if (!row) break;
         try {
+          const reason = await this.handlers.filter?.(row.actionId);
+          if (reason) {
+            this.set(row.actionId, "filtered", reason);
+            continue;
+          }
           let result = row.result ? JSON.parse(row.result) : null;
           if (row.status === "queued") {
             if (!this.handlers.canUnderstand()) break;
-            const item = this.handlers.read(row.actionId);
+            const item = await this.handlers.read(row.actionId);
             if (!item) {
               this.set(row.actionId, "failed", "action_missing");
               continue;
@@ -120,6 +128,11 @@ export class ActionQueue {
             this.set(row.actionId, "ready", null, result);
           }
           if (!this.handlers.canDeliver()) continue;
+          const latestReason = await this.handlers.filter?.(row.actionId);
+          if (latestReason) {
+            this.set(row.actionId, "filtered", latestReason);
+            continue;
+          }
           await this.handlers.deliver(row.actionId, result);
           this.set(row.actionId, "delivered");
         } catch (error) {

@@ -18,6 +18,12 @@ import { AXHistory } from "../observation/ax-history.ts";
 import { AXRecorder } from "../observation/ax-recorder.ts";
 import { AXInspectorClient } from "../observation/ax-inspector-client.ts";
 import { precedingAXEvent } from "../observation/ax-history-view.ts";
+import { RoutingStore } from "../observation/routing-store.ts";
+import {
+  matchesRouting,
+  snapshotRoutingReason,
+} from "../observation/routing-policy.ts";
+import { axObservation } from "../observation/ax-agent-bridge.ts";
 import { join, resolve } from "node:path";
 import {
   mkdir,
@@ -48,6 +54,8 @@ let store: EvidenceStore;
 let collector: NativeCollectorHost;
 let axRecorder: AXRecorder | undefined;
 let axInspector: AXInspectorClient | undefined;
+let routing: RoutingStore;
+let axHistory: AXHistory;
 let runtime: RuntimeHost | undefined;
 let runtimeReady = false;
 let modelRoles: ModelRoles;
@@ -103,6 +111,11 @@ function observation(actionId: string) {
       understandings.get(actionId) ?? queue?.result(actionId) ?? null,
   };
 }
+async function readObservation(actionId: string) {
+  return actionId.startsWith("ax-")
+    ? axObservation(await axHistory.get(actionId))
+    : observation(actionId);
+}
 function snapshot() {
   return {
     actions: store.listActions(200).map((item) => {
@@ -121,7 +134,12 @@ function snapshot() {
       };
     }),
     activities: store.listActivities(100),
-    collector: collector.status(),
+    collector: {
+      ...collector.status(),
+      ...axRecorder?.status(),
+      permissions: collector.status().permissions,
+    },
+    routing: routing.get(),
     events,
     mode,
     connection,
@@ -138,7 +156,7 @@ let understanding: UnderstandingService;
 async function summarize(actionId: string, view: "raw" | "context") {
   const config = modelRoles.get("understanding");
   if (!config) throw new Error("understanding_model_unavailable");
-  const item = observation(actionId);
+  const item = await readObservation(actionId);
   const result = await understanding.summarize(
     {
       action: item.action as unknown as Record<string, unknown>,
@@ -159,7 +177,16 @@ function admit(action: any) {
       : ["key_down", "key_up"].includes(action.kind) &&
           action.input?.key_category !== "special"
         ? "ordinary_typing_filtered"
-        : undefined;
+        : !matchesRouting(
+              {
+                kind: action.kind,
+                key: action.input?.key_name,
+                modifiers: action.input?.modifiers,
+              },
+              routing.get(),
+            )
+          ? "trigger_not_selected"
+          : undefined;
   queue.enqueue(action.action_id, reason);
 }
 async function startRuntime(fixture: boolean) {
@@ -199,7 +226,7 @@ async function startRuntime(fixture: boolean) {
     subagentConfig: fixture ? undefined : modelRoles.get("subagent"),
     allowedReadRoot,
     readObservation: async (id) => {
-      const item = observation(id);
+      const item = await readObservation(id);
       return {
         ...item,
         artifacts: Object.fromEntries(
@@ -269,7 +296,11 @@ app.on("before-quit", (event) => {
 async function bootstrap() {
   console.error("[proactive] bootstrap:ready");
   await mkdir(app.getPath("userData"), { recursive: true });
-  const axHistory = new AXHistory(
+  routing = new RoutingStore(
+    join(app.getPath("userData"), "observation-routing.json"),
+  );
+  await routing.load();
+  axHistory = new AXHistory(
     join(app.getPath("userData"), "ax-snapshots"),
     (path) => shell.trashItem(path),
   );
@@ -290,6 +321,18 @@ async function bootstrap() {
       return result;
     },
     () => notify(),
+    async (snapshot) => {
+      const reason = snapshotRoutingReason(snapshot, routing.get());
+      if (reason) {
+        await axHistory.update(snapshot.snapshotId, {
+          routing: { status: "not_selected", reason },
+        });
+        return;
+      }
+      const id = snapshot.snapshotId;
+      await axHistory.update(id, { routing: { status: "queued" } });
+      queue.enqueue(id);
+    },
   );
   modelRoles = new ModelRoles(
     join(app.getPath("userData"), "model-roles.json"),
@@ -322,20 +365,57 @@ async function bootstrap() {
   queue = new ActionQueue(
     join(app.getPath("userData"), "action-queue.sqlite"),
     {
-      read: observation,
+      read: readObservation,
+      filter: async (id) => {
+        if (id.startsWith("ax-")) {
+          try {
+            return snapshotRoutingReason(
+              await axHistory.get(id),
+              routing.get(),
+            );
+          } catch {
+            return "record_missing";
+          }
+        }
+        const action = store.getObservation(id)?.action;
+        if (!action) return "action_missing";
+        if (action.policy_status === "excluded")
+          return "excluded_by_capture_policy";
+        return matchesRouting(
+          {
+            kind: action.kind,
+            key: action.input?.key_name,
+            modifiers: action.input?.modifiers,
+          },
+          routing.get(),
+        )
+          ? undefined
+          : "trigger_not_selected";
+      },
       canUnderstand: () =>
         !!modelRoles.get("understanding") && mode !== "deterministic_fixture",
       canDeliver: () => runtimeReady && !!runtime && mode === "gemini",
       understand: (item) => summarize(item.action.action_id, "context"),
-      deliver: async (actionId, result) =>
-        runtime!.request("observe", {
+      deliver: async (actionId, result) => {
+        const action = (await readObservation(actionId)).action;
+        const factualUnderstanding = { ...result.result };
+        delete factualUnderstanding.intent_hypothesis;
+        return runtime!.request("observe", {
           actionId: "understood:" + actionId,
           value: {
             evidence_action_id: actionId,
-            understanding: result.result,
+            occurred_at: action?.occurred_at,
+            app: action?.app,
+            operation: {
+              kind: action?.kind,
+              key: action?.input?.key_name,
+              modifiers: action?.input?.modifiers,
+            },
+            understanding: factualUnderstanding,
             input_manifest_hash: result.input_manifest_hash,
           },
-        }),
+        });
+      },
       change: notify,
     },
   );
@@ -401,6 +481,10 @@ async function bootstrap() {
       switch (method) {
         case "snapshot":
           return snapshot();
+        case "routing.update":
+          await routing.update(p.triggers);
+          void queue.drain();
+          return snapshot();
         case "ax.apps":
         case "ax.inspect": {
           const pid = Number(p.pid);
@@ -423,6 +507,8 @@ async function bootstrap() {
         }
         case "ax.history":
           return axHistory.list();
+        case "ax.analysis":
+          return queue.result(String(p.id));
         case "ax.record.status":
           return axRecorder!.status();
         case "ax.record.start":
@@ -525,11 +611,13 @@ async function bootstrap() {
           const allApps = p.allApps === true;
           if (!allApps && !allowedBundleIds.length)
             throw new Error("allowlist_required");
-          await collector.start({ allowedBundleIds, allApps });
+          await axInspector!.start();
+          await axRecorder!.start({ allowedBundleIds, allApps });
           return snapshot();
         }
         case "capture.stop":
-          await collector.stop();
+          await axRecorder!.stop();
+          await axInspector!.close();
           return snapshot();
         case "config": {
           const role = p.role as ModelRole;
