@@ -10,6 +10,7 @@ export class ActionQueue {
   private db: DatabaseSync;
   private busy = false;
   private stopped = false;
+  private closed = false;
   constructor(
     path: string,
     private handlers: {
@@ -150,6 +151,12 @@ export class ActionQueue {
   async close() {
     this.stopped = true;
     while (this.busy) await new Promise((r) => setTimeout(r, 10));
-    this.db.close();
+    if (!this.closed) {
+      this.db.close();
+      this.closed = true;
+    }
+  }
+  pause() {
+    this.stopped = true;
   }
 }

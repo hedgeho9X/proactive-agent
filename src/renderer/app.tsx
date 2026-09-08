@@ -454,6 +454,7 @@ function App() {
   const refreshing = useRef(false);
   const refreshAgain = useRef(false);
   const selectedRef = useRef<StreamRow | null>(null);
+  const generationRef = useRef(0);
   selectedRef.current = selected;
   async function refresh() {
     if (refreshing.current) {
@@ -463,6 +464,13 @@ function App() {
     refreshing.current = true;
     try {
       const next = await api.invoke("snapshot");
+      if ((next.historyGeneration ?? 0) < generationRef.current) return;
+      if ((next.historyGeneration ?? 0) > generationRef.current) {
+        generationRef.current = next.historyGeneration;
+        setAXRecords([]);
+        setSelected(null);
+        setObservation(null);
+      }
       setState(next);
     } catch (e) {
       setError(String(e));
@@ -478,7 +486,8 @@ function App() {
     setBusy(method);
     setError("");
     try {
-      await api.invoke(method, params);
+      const result = await api.invoke(method, params);
+      if (result?.cancelled) return false;
       await refresh();
       if (method.startsWith("ax.")) await refreshAXRecords();
       return true;
@@ -490,7 +499,9 @@ function App() {
     }
   }
   async function refreshAXRecords() {
-    setAXRecords(await api.invoke("ax.history"));
+    const result = await api.invoke("records.list");
+    if (result.generation >= generationRef.current)
+      setAXRecords(result.records);
   }
   useEffect(() => {
     let active = true,
@@ -499,8 +510,9 @@ function App() {
       if (polling) return;
       polling = true;
       try {
-        const records = await api.invoke("ax.history");
-        if (active) setAXRecords(records);
+        const result = await api.invoke("records.list");
+        if (active && result.generation >= generationRef.current)
+          setAXRecords(result.records);
       } catch {
         if (active) setError("读取本地记录失败");
       } finally {
@@ -760,20 +772,46 @@ function App() {
           <Button
             size="sm"
             variant="ghost"
-            disabled={!!busy || state.collector.state === "running"}
+            disabled={!!busy || state.clearing}
             onClick={() =>
-              void act("ax.clear").then((ok) => {
+              void act("records.clear").then((ok) => {
                 if (ok) setSelected(null);
               })
             }
           >
-            清空本地记录
+            {state.clearing ? "正在清空…" : "清空全部本地历史"}
           </Button>
           <span className="text-xs text-muted-foreground">
             显示最近 500 条匹配记录；仅选中触发操作进入 Agent
           </span>
         </div>
         <Separator />
+        {state.clearState?.message && (
+          <Alert
+            variant={
+              ["failed", "trash_failed"].includes(state.clearState.phase)
+                ? "destructive"
+                : "default"
+            }
+            className="rounded-none py-2"
+          >
+            <AlertDescription>
+              <div className="flex flex-wrap items-center gap-2" role="status">
+                <span>{state.clearState.message}</span>
+                {state.clearState.phase === "trash_failed" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!!busy || state.clearing}
+                    onClick={() => act("records.retryTrash")}
+                  >
+                    重试移到废纸篓
+                  </Button>
+                )}
+              </div>
+            </AlertDescription>
+          </Alert>
+        )}
         {error && (
           <Alert variant="destructive" className="rounded-none py-2">
             <AlertDescription>

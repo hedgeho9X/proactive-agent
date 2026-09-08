@@ -104,6 +104,10 @@ export class UnderstandingService {
   abort() {
     this.controller.abort();
   }
+  async close() {
+    this.abort();
+    await Promise.allSettled([...this.active.values()]);
+  }
   private active = new Map<string, Promise<unknown>>();
 
   constructor(

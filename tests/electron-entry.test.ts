@@ -27,7 +27,7 @@ test("Electron ESM入口在ready尚未触发时也能完成模块求值", () => 
         `
       import {SourceTextModule,SyntheticModule} from 'node:vm';
       import {readFileSync} from 'node:fs';
-      const app={setName(){},setPath(){},getPath(){return '/private/tmp/proactive-mock';},on(){},whenReady(){return new Promise(()=>{});}};
+      const app={setName(){},setPath(){},getPath(){return '/private/tmp/proactive-mock';},requestSingleInstanceLock(){return true;},on(){},whenReady(){return new Promise(()=>{});}};
       const entry=new SourceTextModule(readFileSync(${JSON.stringify(outfile)},'utf8'));
       await entry.link(async name=>{
         const exports=name==='electron'?{app,BrowserWindow:class{},ipcMain:{},dialog:{},shell:{},clipboard:{},nativeImage:{},ClipboardItem:class{},screen:{}}:await import(name);

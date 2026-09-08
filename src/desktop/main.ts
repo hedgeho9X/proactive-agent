@@ -43,6 +43,7 @@ import {
 } from "../model/understanding.ts";
 import type { ModelConfig } from "../model/gemini.ts";
 import { DesktopDanmaku } from "./danmaku.ts";
+import { HistoryClear } from "../observation/clear-history.ts";
 
 app.setName("Proactive Lab");
 app.setPath(
@@ -50,6 +51,9 @@ app.setPath(
   process.env.PROACTIVE_DATA_DIR ??
     join(app.getPath("appData"), "Proactive Lab"),
 );
+// 同一数据目录只允许一个桌面实例，防止清理期间其他实例继续写入旧数据库。
+const ownsDataDirectory = app.requestSingleInstanceLock();
+if (!ownsDataDirectory) app.quit();
 let window: BrowserWindow | undefined;
 let danmaku: DesktopDanmaku | undefined;
 let store: EvidenceStore;
@@ -67,6 +71,12 @@ let connection = "unavailable";
 let allowedReadRoot: string | undefined;
 let autoUnderstand = false;
 let shuttingDown = false;
+let clearing = false;
+let dataUnavailable = false;
+let clearWork: Promise<unknown> | undefined;
+let clearState: any = { phase: "idle" };
+let historyGeneration = 0;
+const operations = new Set<Promise<unknown>>();
 const events: any[] = [];
 const understandings = new Map<string, unknown>();
 let sequence = 0;
@@ -119,7 +129,24 @@ async function readObservation(actionId: string) {
     : observation(actionId);
 }
 function snapshot() {
+  if (dataUnavailable)
+    return {
+      actions: [],
+      activities: [],
+      events: [],
+      queue: [],
+      collector: { state: "stopped" },
+      mode: "unavailable",
+      modelRoles: modelRoles.snapshot(),
+      routing: routing.get(),
+      clearing,
+      clearState,
+      historyGeneration,
+    };
   return {
+    clearing,
+    clearState,
+    historyGeneration,
     actions: store.listActions(200).map((item) => {
       const record =
         understandings.get(item.action.action_id) ??
@@ -261,6 +288,7 @@ async function startRuntime(fixture: boolean) {
 }
 async function closeAll() {
   if (shuttingDown) return;
+  await clearWork?.catch(() => {});
   shuttingDown = true;
   danmaku?.close();
   runtimeReady = false;
@@ -306,125 +334,220 @@ async function bootstrap() {
     join(app.getPath("userData"), "observation-routing.json"),
   );
   await routing.load();
-  axHistory = new AXHistory(
-    join(app.getPath("userData"), "ax-snapshots"),
-    (path) => shell.trashItem(path),
-  );
-  axInspector = new AXInspectorClient(
-    join(app.getAppPath(), "dist", "native", "ProactiveCollector"),
-  );
-  axRecorder = new AXRecorder(
-    join(app.getAppPath(), "dist", "native", "ProactiveCollector"),
-    axHistory,
-    async (event) => {
-      const result = await axInspector!.inspect(event);
-      if (
-        result.appLaunchedAt &&
-        event.appLaunchedAt &&
-        result.appLaunchedAt !== event.appLaunchedAt
-      )
-        return { error: "target_process_replaced" };
-      return result;
-    },
-    () => notify(),
-    async (snapshot) => {
-      const reason = snapshotRoutingReason(snapshot, routing.get());
-      if (reason) {
-        await axHistory.update(snapshot.snapshotId, {
-          routing: { status: "not_selected", reason },
-        });
-        return;
-      }
-      const id = snapshot.snapshotId;
-      await axHistory.update(id, { routing: { status: "queued" } });
-      queue.enqueue(id);
-    },
-  );
   modelRoles = new ModelRoles(
     join(app.getPath("userData"), "model-roles.json"),
   );
   await modelRoles.load();
-  store = new EvidenceStore(
-    join(app.getPath("userData"), "observations.sqlite"),
-  );
-  collector = new NativeCollectorHost({
-    binaryPath: join(app.getAppPath(), "dist", "native", "ProactiveCollector"),
-    store,
-    onEvent: (event: any) => {
-      if (["status", "permissions", "error"].includes(event.type))
-        emit({ kind: "collector." + event.type, ...event });
-      notify();
-      if (event.type === "action") admit(event.action);
-      else if (event.type === "artifact") void queue.drain();
-    },
-  });
   const cacheDir = join(app.getPath("userData"), "understanding");
-  understanding = new UnderstandingService(cacheDir, (event) => {
-    modelRoles.status.understanding =
-      event.kind === "understanding.failed"
-        ? "last_request_failed"
-        : event.kind === "understanding.completed"
-          ? "connected"
-          : modelRoles.status.understanding;
-    emit(event);
-  });
-  queue = new ActionQueue(
-    join(app.getPath("userData"), "action-queue.sqlite"),
-    {
-      read: readObservation,
-      filter: async (id) => {
-        if (id.startsWith("ax-")) {
-          try {
-            return snapshotRoutingReason(
-              await axHistory.get(id),
-              routing.get(),
-            );
-          } catch {
-            return "record_missing";
-          }
-        }
-        const action = store.getObservation(id)?.action;
-        if (!action) return "action_missing";
-        if (action.policy_status === "excluded")
-          return "excluded_by_capture_policy";
-        return matchesRouting(
-          {
-            kind: action.kind,
-            key: action.input?.key_name,
-            modifiers: action.input?.modifiers,
-          },
-          routing.get(),
+  function openStores() {
+    axHistory = new AXHistory(
+      join(app.getPath("userData"), "ax-snapshots"),
+      (path) => shell.trashItem(path),
+    );
+    axInspector = new AXInspectorClient(
+      join(app.getAppPath(), "dist", "native", "ProactiveCollector"),
+    );
+    axRecorder = new AXRecorder(
+      join(app.getAppPath(), "dist", "native", "ProactiveCollector"),
+      axHistory,
+      async (event) => {
+        const result = await axInspector!.inspect(event);
+        if (
+          result.appLaunchedAt &&
+          event.appLaunchedAt &&
+          result.appLaunchedAt !== event.appLaunchedAt
         )
-          ? undefined
-          : "trigger_not_selected";
+          return { error: "target_process_replaced" };
+        return result;
       },
-      canUnderstand: () =>
-        !!modelRoles.get("understanding") && mode !== "deterministic_fixture",
-      canDeliver: () => runtimeReady && !!runtime && mode === "gemini",
-      understand: (item) => summarize(item.action.action_id, "context"),
-      deliver: async (actionId, result) => {
-        const action = (await readObservation(actionId)).action;
-        const factualUnderstanding = { ...result.result };
-        delete factualUnderstanding.intent_hypothesis;
-        return runtime!.request("observe", {
-          actionId: "understood:" + actionId,
-          value: {
-            evidence_action_id: actionId,
-            occurred_at: action?.occurred_at,
-            app: action?.app,
-            operation: {
-              kind: action?.kind,
-              key: action?.input?.key_name,
-              modifiers: action?.input?.modifiers,
+      () => notify(),
+      async (snapshot) => {
+        const reason = snapshotRoutingReason(snapshot, routing.get());
+        if (reason) {
+          await axHistory.update(snapshot.snapshotId, {
+            routing: { status: "not_selected", reason },
+          });
+          return;
+        }
+        const id = snapshot.snapshotId;
+        await axHistory.update(id, { routing: { status: "queued" } });
+        queue.enqueue(id);
+      },
+    );
+    store = new EvidenceStore(
+      join(app.getPath("userData"), "observations.sqlite"),
+    );
+    collector = new NativeCollectorHost({
+      binaryPath: join(
+        app.getAppPath(),
+        "dist",
+        "native",
+        "ProactiveCollector",
+      ),
+      store,
+      onEvent: (event: any) => {
+        if (["status", "permissions", "error"].includes(event.type))
+          emit({ kind: "collector." + event.type, ...event });
+        notify();
+        if (event.type === "action") admit(event.action);
+        else if (event.type === "artifact") void queue.drain();
+      },
+    });
+    understanding = new UnderstandingService(cacheDir, (event) => {
+      modelRoles.status.understanding =
+        event.kind === "understanding.failed"
+          ? "last_request_failed"
+          : event.kind === "understanding.completed"
+            ? "connected"
+            : modelRoles.status.understanding;
+      emit(event);
+    });
+    queue = new ActionQueue(
+      join(app.getPath("userData"), "action-queue.sqlite"),
+      {
+        read: readObservation,
+        filter: async (id) => {
+          if (id.startsWith("ax-")) {
+            try {
+              return snapshotRoutingReason(
+                await axHistory.get(id),
+                routing.get(),
+              );
+            } catch {
+              return "record_missing";
+            }
+          }
+          const action = store.getObservation(id)?.action;
+          if (!action) return "action_missing";
+          if (action.policy_status === "excluded")
+            return "excluded_by_capture_policy";
+          return matchesRouting(
+            {
+              kind: action.kind,
+              key: action.input?.key_name,
+              modifiers: action.input?.modifiers,
             },
-            understanding: factualUnderstanding,
-            input_manifest_hash: result.input_manifest_hash,
-          },
-        });
+            routing.get(),
+          )
+            ? undefined
+            : "trigger_not_selected";
+        },
+        canUnderstand: () =>
+          !clearing &&
+          !!modelRoles.get("understanding") &&
+          mode !== "deterministic_fixture",
+        canDeliver: () =>
+          !clearing && runtimeReady && !!runtime && mode === "gemini",
+        understand: (item) => summarize(item.action.action_id, "context"),
+        deliver: async (actionId, result) => {
+          const action = (await readObservation(actionId)).action;
+          const factualUnderstanding = { ...result.result };
+          delete factualUnderstanding.intent_hypothesis;
+          return runtime!.request("observe", {
+            actionId: "understood:" + actionId,
+            value: {
+              evidence_action_id: actionId,
+              occurred_at: action?.occurred_at,
+              app: action?.app,
+              operation: {
+                kind: action?.kind,
+                key: action?.input?.key_name,
+                modifiers: action?.input?.modifiers,
+              },
+              understanding: factualUnderstanding,
+              input_manifest_hash: result.input_manifest_hash,
+            },
+          });
+        },
+        change: notify,
       },
-      change: notify,
-    },
+    );
+  }
+  const historyClear = new HistoryClear(app.getPath("userData"), (path) =>
+    shell.trashItem(path),
   );
+  await historyClear.recoverInterrupted();
+  openStores();
+  const pendingTrash = await historyClear.pending();
+  if (pendingTrash.length)
+    clearState = {
+      phase: "trash_failed",
+      failed: pendingTrash,
+      message: "历史已移出，但有备份尚未移入废纸篓，请重试。",
+    };
+
+  async function clearHistory(retryOnly = false) {
+    clearing = true;
+    const update = (value: any) => {
+      clearState = value;
+      notify();
+    };
+    let snapshots = clearState.snapshots ?? 0;
+    try {
+      if (!retryOnly) {
+        update({
+          phase: "stopping",
+          message: "正在停止采集与 Agent，等待在途处理结束…",
+        });
+        queue.pause();
+        runtimeReady = false;
+        understanding.abort();
+        await axRecorder!.stop();
+        await axInspector!.close();
+        // 等待之前的手动采集、模型配置和理解请求退出，禁止晚到写入重建旧目录。
+        await Promise.allSettled([...operations]);
+        await understanding.close();
+        await collector.stop();
+        await runtime?.close();
+        runtime = undefined;
+        await pruneWork;
+        dataUnavailable = true;
+        await queue.close();
+        store.close();
+        const stage = await historyClear.stage((completed, total) =>
+          update({
+            phase: "moving",
+            completed,
+            total,
+            message: `正在整批移出本地历史：${completed}/${total} 个数据项…`,
+          }),
+        );
+        snapshots = stage.snapshots;
+        events.length = 0;
+        understandings.clear();
+        sequence = 0;
+        historyGeneration++;
+        mode = "unavailable";
+        autoUnderstand = false;
+        danmaku?.clear();
+        openStores();
+        dataUnavailable = false;
+      }
+      update({
+        phase: "trashing",
+        snapshots,
+        message: "本地历史已清空，正在把整批备份移到废纸篓…",
+      });
+      const result = await historyClear.finish();
+      update({
+        ...result,
+        snapshots,
+        phase: result.failed.length ? "trash_failed" : "complete",
+        message: result.failed.length
+          ? `历史已清空，但 ${result.failed.length} 批备份移入废纸篓失败；可重试，不会删除新记录。`
+          : `已清空全部本地历史（含 ${snapshots} 条 AX 快照），旧数据已移到废纸篓。`,
+      });
+    } catch (error) {
+      update({
+        phase: "failed",
+        message: `清理未完成：${error instanceof Error ? error.message : "unknown"}。数据保留，请勿手动删除恢复目录。`,
+      });
+    } finally {
+      clearing = false;
+      notify();
+    }
+    return clearState;
+  }
   // 从本应用SQLite原始action账本重建缺失队列项，不受UI最近200条限制。
   const ledger = new DatabaseSync(
     join(app.getPath("userData"), "observations.sqlite"),
@@ -474,271 +597,317 @@ async function bootstrap() {
         });
       }
     }
-  const queueTick = setInterval(() => void queue.drain(), 1000);
+  let pruneWork: Promise<void> = Promise.resolve();
+  const queueTick = setInterval(() => {
+    if (!clearing && !dataUnavailable) void queue.drain();
+  }, 1000);
   queueTick.unref();
   const cleanup = setInterval(() => {
+    if (clearing || dataUnavailable) return;
     store.prune();
-    void pruneCache();
+    pruneWork = pruneCache().catch(() => {});
   }, 60_000);
   cleanup.unref();
-  ipcMain.handle(
-    "proactive:invoke",
-    async (_event, method: string, p: any = {}) => {
-      switch (method) {
-        case "danmaku.preview": {
-          const result = await danmaku?.show({
-            text: "你好，我是 Proactive Agent。这是一条桌面弹幕测试。",
-          });
-          if (result?.status !== "shown")
-            throw new Error(`danmaku_${result?.status ?? "unavailable"}`);
-          return result;
-        }
-        case "danmaku.enabled":
-          if (typeof p.enabled !== "boolean")
-            throw new Error("invalid_enabled");
-          danmaku?.setEnabled(p.enabled);
-          return snapshot();
-        case "danmaku.clear":
-          danmaku?.clear();
-          return { status: "cleared" };
-        case "snapshot":
-          return snapshot();
-        case "routing.update":
-          await routing.update(p.triggers);
-          void queue.drain();
-          return snapshot();
-        case "ax.apps":
-        case "ax.inspect": {
-          const pid = Number(p.pid);
-          if (method === "ax.inspect" && (!Number.isInteger(pid) || pid <= 0))
-            throw new Error("invalid_app_pid");
-          const args =
-            method === "ax.apps"
-              ? ["--inspect-apps"]
-              : ["--inspect", String(pid)];
-          // 只返回到观测台，不保存到动作账本，不触发任何模型请求。
-          const { stdout } = await promisify(execFile)(
-            join(app.getAppPath(), "dist", "native", "ProactiveCollector"),
-            args,
-            { timeout: 15000, maxBuffer: 24 * 1024 * 1024 },
-          );
-          const result = JSON.parse(stdout);
-          return method === "ax.inspect" && !result.error
-            ? axHistory.save(result)
-            : result;
-        }
-        case "ax.history":
-          return axHistory.list();
-        case "ax.analysis":
-          return queue.result(String(p.id));
-        case "ax.record.status":
-          return axRecorder!.status();
-        case "ax.record.start":
-          await axInspector!.start();
-          return axRecorder!.start();
-        case "ax.record.stop": {
-          const status = await axRecorder!.stop();
-          await axInspector!.close();
-          return status;
-        }
-        case "ax.load":
-          return axHistory.get(String(p.id));
-        case "ax.loadPair": {
-          const current = await axHistory.get(String(p.id));
-          const { previous, missing } = precedingAXEvent(
-            current,
-            await axHistory.list(),
-          );
-          return {
-            current,
-            previous: previous ? await axHistory.get(previous.id) : null,
-            missing,
-          };
-        }
-        case "ax.copy": {
-          const item = await axHistory.get(String(p.id));
-          const { previous, missing } = precedingAXEvent(
-            item,
-            await axHistory.list(),
-          );
-          await clipboard.writeText(
-            `AX 快照 ID：${item.snapshotId}\n本地文件：${item.file}` +
-              (previous
-                ? `\n同应用上次有效事件：${previous.id}\n基线文件：${previous.file}\n中间未采集事件：${missing}`
-                : "\n没有更早的同应用有效采集"),
-          );
-          return { copied: true };
-        }
-        case "ax.copyImage": {
-          const data = p.dataUrl;
-          if (
-            typeof data !== "string" ||
-            data.length > 32 * 1024 * 1024 ||
-            !data.startsWith("data:image/png;base64,")
-          )
-            throw new Error("invalid_image");
-          const image = nativeImage.createFromDataURL(data);
-          if (image.isEmpty()) throw new Error("empty_image");
-          await clipboard.write([
-            new ClipboardItem({
-              "image/png": new Blob([new Uint8Array(image.toPNG())], {
-                type: "image/png",
-              }),
+  const invoke = async (method: string, p: any = {}) => {
+    switch (method) {
+      case "danmaku.preview": {
+        const result = await danmaku?.show({
+          text: "你好，我是 Proactive Agent。这是一条桌面弹幕测试。",
+        });
+        if (result?.status !== "shown")
+          throw new Error(`danmaku_${result?.status ?? "unavailable"}`);
+        return result;
+      }
+      case "danmaku.enabled":
+        if (typeof p.enabled !== "boolean") throw new Error("invalid_enabled");
+        danmaku?.setEnabled(p.enabled);
+        return snapshot();
+      case "danmaku.clear":
+        danmaku?.clear();
+        return { status: "cleared" };
+      case "snapshot":
+        return snapshot();
+      case "routing.update":
+        await routing.update(p.triggers);
+        void queue.drain();
+        return snapshot();
+      case "ax.apps":
+      case "ax.inspect": {
+        const pid = Number(p.pid);
+        if (method === "ax.inspect" && (!Number.isInteger(pid) || pid <= 0))
+          throw new Error("invalid_app_pid");
+        const args =
+          method === "ax.apps"
+            ? ["--inspect-apps"]
+            : ["--inspect", String(pid)];
+        // 只返回到观测台，不保存到动作账本，不触发任何模型请求。
+        const { stdout } = await promisify(execFile)(
+          join(app.getAppPath(), "dist", "native", "ProactiveCollector"),
+          args,
+          { timeout: 15000, maxBuffer: 24 * 1024 * 1024 },
+        );
+        const result = JSON.parse(stdout);
+        return method === "ax.inspect" && !result.error
+          ? axHistory.save(result)
+          : result;
+      }
+      case "ax.history":
+        return axHistory.list();
+      case "ax.analysis":
+        return queue.result(String(p.id));
+      case "ax.record.status":
+        return axRecorder!.status();
+      case "ax.record.start":
+        await axInspector!.start();
+        return axRecorder!.start();
+      case "ax.record.stop": {
+        const status = await axRecorder!.stop();
+        await axInspector!.close();
+        return status;
+      }
+      case "ax.load":
+        return axHistory.get(String(p.id));
+      case "ax.loadPair": {
+        const current = await axHistory.get(String(p.id));
+        const { previous, missing } = precedingAXEvent(
+          current,
+          await axHistory.list(),
+        );
+        return {
+          current,
+          previous: previous ? await axHistory.get(previous.id) : null,
+          missing,
+        };
+      }
+      case "ax.copy": {
+        const item = await axHistory.get(String(p.id));
+        const { previous, missing } = precedingAXEvent(
+          item,
+          await axHistory.list(),
+        );
+        await clipboard.writeText(
+          `AX 快照 ID：${item.snapshotId}\n本地文件：${item.file}` +
+            (previous
+              ? `\n同应用上次有效事件：${previous.id}\n基线文件：${previous.file}\n中间未采集事件：${missing}`
+              : "\n没有更早的同应用有效采集"),
+        );
+        return { copied: true };
+      }
+      case "ax.copyImage": {
+        const data = p.dataUrl;
+        if (
+          typeof data !== "string" ||
+          data.length > 32 * 1024 * 1024 ||
+          !data.startsWith("data:image/png;base64,")
+        )
+          throw new Error("invalid_image");
+        const image = nativeImage.createFromDataURL(data);
+        if (image.isEmpty()) throw new Error("empty_image");
+        await clipboard.write([
+          new ClipboardItem({
+            "image/png": new Blob([new Uint8Array(image.toPNG())], {
+              type: "image/png",
             }),
-          ]);
-          return {
-            copied: true,
-            width: image.getSize().width,
-            height: image.getSize().height,
-          };
-        }
-        case "ax.delete":
-          if (
-            axRecorder!.status().state === "running" ||
-            axRecorder!.status().pending
-          )
-            throw new Error("stop_recording_before_delete");
-          await axHistory.remove(String(p.id));
-          return { deleted: true };
-        case "ax.clear": {
-          if (
-            axRecorder!.status().state === "running" ||
-            axRecorder!.status().pending
-          )
-            throw new Error("stop_recording_before_delete");
-          const choice = await dialog.showMessageBox({
-            type: "warning",
-            buttons: ["取消", "移到废纸篓"],
-            defaultId: 0,
-            cancelId: 0,
-            message: "清空 AX 观测台的所有历史快照？",
-            detail:
-              "仅移除观测台快照，不影响观察流水、模型配置或 Agent 会话。可从系统废纸篓恢复。",
-          });
-          return choice.response === 1
-            ? axHistory.clear()
-            : { cancelled: true };
-        }
-        case "observation":
-          return observation(String(p.actionId));
-        case "permissions":
-          await collector.checkPermissions();
-          return collector.status();
-        case "permission.request":
-          return collector.requestPermission(String(p.permission));
-        case "capture.start": {
-          const allowedBundleIds = String(p.bundleIds ?? "")
-            .split(/[\s,]+/)
-            .filter(Boolean);
-          const allApps = p.allApps === true;
-          if (!allApps && !allowedBundleIds.length)
-            throw new Error("allowlist_required");
-          await axInspector!.start();
-          await axRecorder!.start({ allowedBundleIds, allApps });
-          return snapshot();
-        }
-        case "capture.stop":
-          await axRecorder!.stop();
-          await axInspector!.close();
-          return snapshot();
-        case "config": {
-          const role = p.role as ModelRole;
-          await modelRoles.update(role, p.config ?? {});
-          if (role === "main" || role === "subagent") {
-            if (modelRoles.get("main")) await startRuntime(false);
-            else {
-              await runtime?.close();
-              runtime = undefined;
-              mode = "unavailable";
-            }
-          }
-          if (role === "understanding" && mode === "deterministic_fixture") {
+          }),
+        ]);
+        return {
+          copied: true,
+          width: image.getSize().width,
+          height: image.getSize().height,
+        };
+      }
+      case "ax.delete":
+        if (
+          axRecorder!.status().state === "running" ||
+          axRecorder!.status().pending
+        )
+          throw new Error("stop_recording_before_delete");
+        await axHistory.remove(String(p.id));
+        return { deleted: true };
+      case "observation":
+        return observation(String(p.actionId));
+      case "permissions":
+        await collector.checkPermissions();
+        return collector.status();
+      case "permission.request":
+        return collector.requestPermission(String(p.permission));
+      case "capture.start": {
+        if (!runtime && modelRoles.get("main")) await startRuntime(false);
+        const allowedBundleIds = String(p.bundleIds ?? "")
+          .split(/[\s,]+/)
+          .filter(Boolean);
+        const allApps = p.allApps === true;
+        if (!allApps && !allowedBundleIds.length)
+          throw new Error("allowlist_required");
+        await axInspector!.start();
+        await axRecorder!.start({ allowedBundleIds, allApps });
+        return snapshot();
+      }
+      case "capture.stop":
+        await axRecorder!.stop();
+        await axInspector!.close();
+        return snapshot();
+      case "config": {
+        const role = p.role as ModelRole;
+        await modelRoles.update(role, p.config ?? {});
+        if (role === "main" || role === "subagent") {
+          if (modelRoles.get("main")) await startRuntime(false);
+          else {
             await runtime?.close();
             runtime = undefined;
             mode = "unavailable";
-            if (modelRoles.get("main")) await startRuntime(false);
           }
-          void queue.drain();
-          return { modelRoles: modelRoles.snapshot(), mode };
         }
-        case "model.test": {
-          const role = p.role as ModelRole;
-          if (!["understanding", "main", "subagent"].includes(role))
-            throw new Error("invalid_model_role");
-          const config = modelRoles.get(role);
-          const result = await testModelConnection(config);
-          // 配置已变更时不让旧请求覆盖新配置状态。
-          if (JSON.stringify(config) === JSON.stringify(modelRoles.get(role))) {
-            modelRoles.status[role] = result.ok
-              ? "connected"
-              : config
-                ? "last_request_failed"
-                : "unavailable";
+        if (role === "understanding" && mode === "deterministic_fixture") {
+          await runtime?.close();
+          runtime = undefined;
+          mode = "unavailable";
+          if (modelRoles.get("main")) await startRuntime(false);
+        }
+        void queue.drain();
+        return { modelRoles: modelRoles.snapshot(), mode };
+      }
+      case "model.test": {
+        const role = p.role as ModelRole;
+        if (!["understanding", "main", "subagent"].includes(role))
+          throw new Error("invalid_model_role");
+        const config = modelRoles.get(role);
+        const result = await testModelConnection(config);
+        // 配置已变更时不让旧请求覆盖新配置状态。
+        if (JSON.stringify(config) === JSON.stringify(modelRoles.get(role))) {
+          modelRoles.status[role] = result.ok
+            ? "connected"
+            : config
+              ? "last_request_failed"
+              : "unavailable";
+          notify();
+        }
+        return result;
+      }
+      case "retry":
+        queue.retry(String(p.actionId));
+        return { queue: queue.list() };
+      case "fixture":
+        await startRuntime(true);
+        await runtime!.request("observe", {
+          actionId: "fixture-" + Date.now(),
+          value: {
+            scenario: "dispatch",
+            taskId: "demo-" + Date.now(),
+            target: "Monday",
+          },
+        });
+        return { mode };
+      case "prompt":
+        if (!runtime && modelRoles.get("main")) await startRuntime(false);
+        if (!runtime) throw new Error("agent_unavailable");
+        return runtime.request("observe", {
+          actionId: "prompt-" + Date.now(),
+          value:
+            mode === "gemini"
+              ? { user_prompt: String(p.text) }
+              : {
+                  scenario: "observation",
+                  fact: String(p.text),
+                  origin: "user_prompt",
+                },
+        });
+      case "revise": {
+        if (!runtime) throw new Error("agent_unavailable");
+        const result = await runtime.request("revise", {
+          taskId: p.taskId,
+          target: p.target,
+        });
+        emit({ kind: "task.revised", ...result });
+        return result;
+      }
+      case "cancel":
+        if (!runtime) throw new Error("agent_unavailable");
+        return runtime.request("cancel", { taskId: p.taskId });
+      case "summarize":
+        return summarize(
+          String(p.actionId),
+          p.view === "raw" ? "raw" : "context",
+        );
+      case "auto":
+        return {
+          autoUnderstand: true,
+          reason: "each_eligible_action_is_queued",
+        };
+      case "readRoot": {
+        const choice = await dialog.showOpenDialog({
+          properties: ["openDirectory"],
+        });
+        if (!choice.canceled) {
+          allowedReadRoot = choice.filePaths[0];
+          if (runtime) await startRuntime(mode !== "gemini");
+        }
+        return { allowedReadRoot };
+      }
+      default:
+        throw new Error("method_not_allowed");
+    }
+  };
+  ipcMain.handle(
+    "proactive:invoke",
+    async (event, method: string, p: any = {}) => {
+      if (event.sender !== window?.webContents)
+        throw new Error("sender_not_allowed");
+      if (method === "snapshot") return snapshot();
+      if (method === "records.list") {
+        const generation = historyGeneration;
+        const records =
+          clearing || dataUnavailable ? [] : await axHistory.list();
+        return { generation, records };
+      }
+      if (method === "ax.history" && (clearing || dataUnavailable)) return [];
+      if (clearing) throw new Error("history_clear_in_progress");
+      if (method === "records.retryTrash") {
+        if (dataUnavailable || clearState.phase !== "trash_failed")
+          throw new Error("no_pending_trash_retry");
+        clearWork = clearHistory(true).finally(() => {
+          clearWork = undefined;
+        });
+        return { started: true };
+      }
+      if (method === "ax.clear" || method === "records.clear") {
+        if (dataUnavailable)
+          throw new Error("history_recovery_restart_required");
+        // 清空确认绑定主窗口；确认期间也锁住修改，避免重复点击与启动采集。
+        clearing = true;
+        notify();
+        const choice = await dialog
+          .showMessageBox(window!, {
+            type: "warning",
+            buttons: ["取消", "清空全部并移到废纸篓"],
+            defaultId: 0,
+            cancelId: 0,
+            message: "清空全部本地历史？",
+            detail:
+              "将停止采集和 Agent，清空所有截图、AX、旧观察流水、理解结果、待处理队列和 Agent 会话。保留模型配置与权限设置。旧数据移到废纸篓，可恢复。",
+          })
+          .catch((error) => {
+            clearing = false;
             notify();
-          }
-          return result;
+            throw error;
+          });
+        if (choice.response !== 1) {
+          clearing = false;
+          notify();
+          return { cancelled: true };
         }
-        case "retry":
-          queue.retry(String(p.actionId));
-          return { queue: queue.list() };
-        case "fixture":
-          await startRuntime(true);
-          await runtime!.request("observe", {
-            actionId: "fixture-" + Date.now(),
-            value: {
-              scenario: "dispatch",
-              taskId: "demo-" + Date.now(),
-              target: "Monday",
-            },
-          });
-          return { mode };
-        case "prompt":
-          if (!runtime) throw new Error("agent_unavailable");
-          return runtime.request("observe", {
-            actionId: "prompt-" + Date.now(),
-            value:
-              mode === "gemini"
-                ? { user_prompt: String(p.text) }
-                : {
-                    scenario: "observation",
-                    fact: String(p.text),
-                    origin: "user_prompt",
-                  },
-          });
-        case "revise": {
-          if (!runtime) throw new Error("agent_unavailable");
-          const result = await runtime.request("revise", {
-            taskId: p.taskId,
-            target: p.target,
-          });
-          emit({ kind: "task.revised", ...result });
-          return result;
-        }
-        case "cancel":
-          if (!runtime) throw new Error("agent_unavailable");
-          return runtime.request("cancel", { taskId: p.taskId });
-        case "summarize":
-          return summarize(
-            String(p.actionId),
-            p.view === "raw" ? "raw" : "context",
-          );
-        case "auto":
-          return {
-            autoUnderstand: true,
-            reason: "each_eligible_action_is_queued",
-          };
-        case "readRoot": {
-          const choice = await dialog.showOpenDialog({
-            properties: ["openDirectory"],
-          });
-          if (!choice.canceled) {
-            allowedReadRoot = choice.filePaths[0];
-            if (runtime) await startRuntime(mode !== "gemini");
-          }
-          return { allowedReadRoot };
-        }
-        default:
-          throw new Error("method_not_allowed");
+        clearWork = clearHistory().finally(() => {
+          clearWork = undefined;
+        });
+        return { started: true };
+      }
+      if (dataUnavailable) throw new Error("history_recovery_restart_required");
+      const operation = invoke(method, p);
+      operations.add(operation);
+      try {
+        return await operation;
+      } finally {
+        operations.delete(operation);
       }
     },
   );
@@ -791,13 +960,14 @@ async function bootstrap() {
   console.error("[proactive] bootstrap:window-loaded");
 }
 app.on("window-all-closed", () => app.quit());
-void app
-  .whenReady()
-  .then(bootstrap)
-  .catch((error) => {
-    console.error(
-      "[proactive] bootstrap:failed",
-      error instanceof Error ? error.stack : String(error),
-    );
-    void closeAll().finally(() => app.exit(1));
-  });
+if (ownsDataDirectory)
+  void app
+    .whenReady()
+    .then(bootstrap)
+    .catch((error) => {
+      console.error(
+        "[proactive] bootstrap:failed",
+        error instanceof Error ? error.stack : String(error),
+      );
+      void closeAll().finally(() => app.exit(1));
+    });

@@ -8,6 +8,7 @@ import type {
 } from "./types.ts";
 export class EvidenceStore {
   private db: DatabaseSync;
+  private closed = false;
   readonly policy: {
     evidenceTTL: number;
     metadataTTL: number;
@@ -356,6 +357,9 @@ export class EvidenceStore {
       });
   }
   close() {
-    this.db.close();
+    if (!this.closed) {
+      this.db.close();
+      this.closed = true;
+    }
   }
 }

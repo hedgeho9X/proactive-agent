@@ -19,6 +19,10 @@ API Key 仅保留在本次进程内存；本应用不读取旧应用配置。文
 
 实现与验收边界见 [桌面弹幕验证](docs/DANMAKU-VERIFICATION.md)。
 
+## 清空全部本地历史
+
+主页面「清空全部本地历史」会在确认后自动停止采集和 Agent，清空截图/AX、旧观察流水、理解缓存、待处理队列和 Agent 会话，保留模型配置及系统权限。旧数据整体移到废纸篓，可恢复。界面显示清理阶段、完成结果；移入废纸篓失败时可重试，重试不会删除新记录。详见 [清空验证与恢复方式](docs/CLEAR-HISTORY-VERIFICATION.md)。
+
 - [需求](docs/PRD.md)
 - [实施进度](docs/IMPLEMENTATION-STATUS.md)
 - [S0 验证](docs/S0-RUNTIME-VERIFICATION.md)
