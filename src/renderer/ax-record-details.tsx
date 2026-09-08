@@ -2,8 +2,8 @@ import React, { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { FocusOverlay } from "./focus-overlay.tsx";
-import { AXDiffView } from "./ax-diff-view.tsx";
-import { attributeText, diffAX } from "./ax-diff.ts";
+import { attributeText } from "./ax-attributes.ts";
+import { AITrace } from "./ai-trace.tsx";
 
 // 本地证据复用主页面的详情抽屉，不再拥有独立页面、导航或采集循环。
 export function AXRecordDetails({
@@ -21,37 +21,24 @@ export function AXRecordDetails({
   recording: boolean;
   onRemoved: () => void;
 }) {
-  const [pair, setPair] = useState<any>(null);
+  const [snapshot, setSnapshot] = useState<any>(null);
   const [tab, setTab] = useState("image");
   const [nodeId, setNodeId] = useState("");
   const [filter, setFilter] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
-  const [analysis, setAnalysis] = useState<any>(null);
   useEffect(() => {
     let cancelled = false;
-    void window.proactive
-      .invoke("ax.analysis", { id: recordId })
-      .then((value) => {
-        if (!cancelled) setAnalysis(value);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [recordId, aiStatus]);
-  useEffect(() => {
-    let cancelled = false;
-    setPair(null);
+    setSnapshot(null);
     setError("");
     setNotice("");
     void window.proactive
-      .invoke("ax.loadPair", { id: recordId })
+      .invoke("ax.load", { id: recordId })
       .then((value) => {
         if (cancelled) return;
-        setPair(value);
-        const s = value.current;
+        setSnapshot(value);
+        const s = value;
         setNodeId(
           s.nodes.some((node: any) => node.id === s.focusId)
             ? s.focusId
@@ -65,7 +52,6 @@ export function AXRecordDetails({
       cancelled = true;
     };
   }, [recordId, status]);
-  const snapshot = pair?.current;
   const node = snapshot?.nodes.find((node: any) => node.id === nodeId);
   async function act(method: string) {
     setBusy(true);
@@ -73,7 +59,7 @@ export function AXRecordDetails({
     try {
       await window.proactive.invoke(method, { id: recordId });
       if (method === "ax.delete") onRemoved();
-      else setNotice("已复制当前记录及基线引用");
+      else setNotice("已复制当前记录 ID");
     } catch {
       setError("操作失败，请先停止记录后重试");
     } finally {
@@ -106,6 +92,7 @@ export function AXRecordDetails({
               queued: "待理解",
               understanding: "理解中",
               ready: "等待主 Agent",
+              delivering: "主 Agent 处理中",
               delivered: "已交给主 Agent",
               filtered: "未触发",
               failed: "失败",
@@ -136,12 +123,6 @@ export function AXRecordDetails({
           </p>
           <p className="text-xs text-muted-foreground">
             当前：{snapshot.trigger?.occurredAt ?? snapshot.capturedAt}
-            <br />
-            同应用上次有效记录：
-            {pair.previous?.trigger?.occurredAt ??
-              pair.previous?.capturedAt ??
-              "无"}
-            {pair.missing ? `（跳过 ${pair.missing} 条无证据操作）` : ""}
           </p>
           {snapshot.timing && (
             <p className="text-xs text-muted-foreground">
@@ -162,8 +143,7 @@ export function AXRecordDetails({
             <TabsList variant="line">
               <TabsTrigger value="image">截图</TabsTrigger>
               <TabsTrigger value="ax">AX 属性</TabsTrigger>
-              <TabsTrigger value="diff">前后 Diff</TabsTrigger>
-              <TabsTrigger value="analysis">理解结果</TabsTrigger>
+              <TabsTrigger value="analysis">AI 理解追踪</TabsTrigger>
               <TabsTrigger value="raw">原始记录</TabsTrigger>
             </TabsList>
             <TabsContent value="image" className="pt-3">
@@ -286,29 +266,8 @@ export function AXRecordDetails({
                 </div>
               </div>
             </TabsContent>
-            <TabsContent value="diff" className="pt-3">
-              <AXDiffView
-                before={pair.previous}
-                after={snapshot}
-                changes={diffAX(pair.previous, snapshot)}
-              />
-            </TabsContent>
             <TabsContent value="analysis" className="pt-3">
-              <p className="mb-2 text-sm">
-                {analysis?.result?.statement ??
-                  "尚未生成理解结果；只有选中的触发操作会进入模型队列。"}
-              </p>
-              <pre className="whitespace-pre-wrap break-all text-xs">
-                {JSON.stringify(
-                  analysis?.result ?? {
-                    status:
-                      aiStatus ?? snapshot.routing?.status ?? "not_selected",
-                    reason: aiReason ?? snapshot.routing?.reason,
-                  },
-                  null,
-                  2,
-                )}
-              </pre>
+              <AITrace id={recordId} status={aiStatus} reason={aiReason} />
             </TabsContent>
             <TabsContent value="raw" className="pt-3">
               <pre className="whitespace-pre-wrap break-all text-xs">

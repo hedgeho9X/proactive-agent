@@ -5,6 +5,9 @@ export function axObservation(snapshot: any) {
   const event = snapshot.trigger ?? {};
   const id = snapshot.snapshotId;
   const at = snapshot.capturedAt ?? event.occurredAt ?? snapshot.savedAt;
+  const protectedEvidence =
+    snapshot.screenshot?.status === "excluded" ||
+    snapshot.nodes?.some((node: any) => node.protected);
   const text = (node: any, name: string) =>
     node.attributes?.[name]?.value?.text;
   const nodes = (snapshot.nodes ?? []).map((node: any) => ({
@@ -54,8 +57,11 @@ export function axObservation(snapshot: any) {
         key_name: event.key,
         key_category: "special",
         modifiers: event.modifiers ?? [],
+        button: event.button,
+        x: event.x,
+        y: event.y,
       },
-      policy_status: "allowed",
+      policy_status: protectedEvidence ? "excluded" : "allowed",
       reason_codes: [],
     },
     activity_id: id,
@@ -64,13 +70,21 @@ export function axObservation(snapshot: any) {
       {
         kind: "ax",
         slot: "ax",
-        status: nodes.length ? "captured" : "unavailable",
+        status: protectedEvidence
+          ? "excluded"
+          : nodes.length
+            ? "captured"
+            : "unavailable",
         reason: nodes.length ? null : "ax_unavailable",
       },
       {
         kind: "screenshot",
         slot: "screenshot",
-        status: snapshot.screenshot?.data ? "captured" : "unavailable",
+        status: protectedEvidence
+          ? "excluded"
+          : snapshot.screenshot?.data
+            ? "captured"
+            : "unavailable",
         reason: snapshot.screenshot?.data
           ? null
           : (snapshot.screenshot?.reason ?? "screenshot_unavailable"),
@@ -89,24 +103,38 @@ export function axObservation(snapshot: any) {
       },
     ],
     artifacts: {
-      ax: nodes.length
-        ? artifact("ax", {
-            nodes: filtered.normalized,
-            context: filtered,
-            coverage: { partial: !!snapshot.partial, timing: snapshot.timing },
-            regions: snapshot.screenshot?.regions,
-          })
-        : null,
-      screenshot: snapshot.screenshot?.data
-        ? artifact(
-            "screenshot",
-            {
-              frame: snapshot.screenshot.frame,
-              regions: snapshot.screenshot.regions,
-            },
-            snapshot.screenshot.data,
-          )
-        : null,
+      ax:
+        !protectedEvidence && nodes.length
+          ? artifact("ax", {
+              nodes: filtered.normalized,
+              raw_nodes: snapshot.nodes,
+              focus_title:
+                text(
+                  (snapshot.nodes ?? []).find(
+                    (node: any) => node.id === snapshot.focusId,
+                  ) ?? {},
+                  "AXTitle",
+                ) ?? null,
+              focus_title_reliability: "辅助线索，可能过时或指错控件",
+              context: filtered,
+              coverage: {
+                partial: !!snapshot.partial,
+                timing: snapshot.timing,
+              },
+              regions: snapshot.screenshot?.regions,
+            })
+          : null,
+      screenshot:
+        !protectedEvidence && snapshot.screenshot?.data
+          ? artifact(
+              "screenshot",
+              {
+                frame: snapshot.screenshot.frame,
+                regions: snapshot.screenshot.regions,
+              },
+              snapshot.screenshot.data,
+            )
+          : null,
       ocr: null,
       screenshot_before: null,
     },

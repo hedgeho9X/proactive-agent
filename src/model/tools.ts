@@ -7,6 +7,8 @@ export interface RuntimeCapabilities {
   readObservation?: (actionId: string) => Promise<unknown>;
   sendDanmaku?: (input: DanmakuInput) => Promise<unknown>;
   allowedReadRoot?: string;
+  prompts?: { main: string; subagent: string };
+  readEvidence?: (id: string, part: "ax" | "ocr" | "image") => Promise<any>;
 }
 // 以真实路径检查阻断 ../ 与符号链接逃逸；只读用户明确选定的小文件。
 export async function readConfinedFile(root: string, path: string) {
@@ -86,6 +88,68 @@ export function registerCapabilities(
       return result;
     },
   );
+  for (const [name, part, description] of [
+    [
+      "get_ax_tree",
+      "ax",
+      "按 Action ID 读取该时刻捕获的 AX 树和焦点信息；不是读取当前实时桌面。AX title 可能不准确。",
+    ],
+    [
+      "get_ocr_content",
+      "ocr",
+      "按 Action ID 读取该动作截图的 OCR 内容和置信度；可能识别错误，未采集时返回 unavailable。",
+    ],
+  ] as const)
+    tool(
+      name,
+      description,
+      { action_id: { type: "string" } },
+      ["action_id"],
+      async (args) =>
+        capabilities.readEvidence
+          ? capabilities.readEvidence((args as any).action_id, part)
+          : { status: "unavailable" },
+    );
+  ctx.tools.register({
+    name: "get_annotated_image",
+    description:
+      "按 Action ID 返回该动作实际交给 AI 理解的标注图片。返回图片内容，而非仅文件路径；需要视觉模型。",
+    parameters: {
+      type: "object",
+      properties: { action_id: { type: "string" } },
+      required: ["action_id"],
+      additionalProperties: false,
+    },
+    execute: async (args) => {
+      const evidence = await capabilities.readEvidence?.(
+        (args as any).action_id,
+        "image",
+      );
+      if (!evidence?.imageBase64) return evidence ?? { status: "unavailable" };
+      const attachment = await ctx.attachments.saveImage({
+        data: Buffer.from(evidence.imageBase64, "base64"),
+        mediaType: "image/png",
+      });
+      return {
+        status: "available",
+        action_id: (args as any).action_id,
+        sourceImageHash: evidence.imageHash,
+        attachment,
+      };
+    },
+    output: {
+      schema: { type: "object", additionalProperties: true },
+      render: (_args, value: any) => [
+        {
+          type: "text",
+          text: JSON.stringify({ ...value, attachment: undefined }),
+        },
+        ...(value.attachment
+          ? [{ type: "image" as const, attachment: value.attachment }]
+          : []),
+      ],
+    },
+  });
   tool(
     "read_file",
     "读取用户选择的测试目录内文件，最多128KB",

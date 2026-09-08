@@ -3,6 +3,7 @@ export type QueueStatus =
   | "queued"
   | "understanding"
   | "ready"
+  | "delivering"
   | "delivered"
   | "failed"
   | "filtered";
@@ -19,15 +20,17 @@ export class ActionQueue {
       canDeliver: () => boolean;
       understand: (item: any) => Promise<any>;
       deliver: (id: string, result: any) => Promise<any>;
+      deliverBatch?: (
+        items: { actionId: string; result: any }[],
+      ) => Promise<any>;
+      concurrency?: () => number;
       change: () => void;
-      filter?: (
-        actionId: string,
-      ) => string | undefined | Promise<string | undefined>;
+      filter?: (id: string) => string | undefined | Promise<string | undefined>;
     },
   ) {
     this.db = new DatabaseSync(path);
     this.db.exec(
-      "PRAGMA journal_mode=WAL;CREATE TABLE IF NOT EXISTS queue(seq INTEGER PRIMARY KEY AUTOINCREMENT,actionId TEXT UNIQUE,status TEXT,reason TEXT,attempts INTEGER DEFAULT 0,result TEXT,createdAt INTEGER);UPDATE queue SET status='queued',reason='interrupted' WHERE status='understanding'",
+      "PRAGMA journal_mode=WAL;CREATE TABLE IF NOT EXISTS queue(seq INTEGER PRIMARY KEY AUTOINCREMENT,actionId TEXT UNIQUE,status TEXT,reason TEXT,attempts INTEGER DEFAULT 0,result TEXT,createdAt INTEGER);UPDATE queue SET status='queued',reason='interrupted' WHERE status='understanding';UPDATE queue SET status='ready',reason='delivery_interrupted' WHERE status='delivering'",
     );
   }
   enqueue(actionId: string, reason?: string) {
@@ -45,24 +48,25 @@ export class ActionQueue {
     void this.drain();
   }
   list() {
+    // 主列表只读取摘要，不把整份 Prompt/AX/响应反复传到渲染层。
     return this.db
       .prepare(
-        "SELECT seq,actionId,status,reason,attempts,createdAt FROM queue ORDER BY seq",
+        "SELECT seq,actionId,status,reason,attempts,createdAt,json_extract(result,'$.result.action_title') AS actionTitle,json_extract(result,'$.result.action_detail') AS actionDetail FROM queue ORDER BY seq",
       )
       .all();
   }
-  result(actionId: string) {
+  result(id: string) {
     const row = this.db
       .prepare("SELECT result FROM queue WHERE actionId=?")
-      .get(actionId) as any;
+      .get(id) as any;
     return row?.result ? JSON.parse(row.result) : null;
   }
-  retry(actionId: string) {
+  retry(id: string) {
     this.db
       .prepare(
         "UPDATE queue SET status=CASE WHEN result IS NULL THEN 'queued' ELSE 'ready' END,reason=NULL WHERE actionId=? AND status='failed'",
       )
-      .run(actionId);
+      .run(id);
     this.handlers.change();
     void this.drain();
   }
@@ -82,81 +86,136 @@ export class ActionQueue {
         .run(status, reason, id);
     this.handlers.change();
   }
+  private async understand(row: any, deferred: Set<string>) {
+    try {
+      const reason = await this.handlers.filter?.(row.actionId);
+      if (reason) {
+        this.set(row.actionId, "filtered", reason);
+        return;
+      }
+      const item = await this.handlers.read(row.actionId);
+      if (!item) throw new Error("action_missing");
+      if (item.evidence.some((e: any) => e.status === "pending")) {
+        if (Date.now() - row.createdAt > 15000)
+          throw new Error("evidence_wait_timeout");
+        deferred.add(row.actionId);
+        this.set(row.actionId, "queued");
+        return;
+      }
+      this.db
+        .prepare("UPDATE queue SET attempts=attempts+1 WHERE actionId=?")
+        .run(row.actionId);
+      const result = await this.handlers.understand(item);
+      this.set(row.actionId, "ready", null, result);
+    } catch (error) {
+      this.set(
+        row.actionId,
+        "failed",
+        error instanceof Error ? error.message : "understanding_failed",
+      );
+    }
+  }
+  private async deliver(rows: any[]) {
+    const selected: { actionId: string; result: any }[] = [];
+    try {
+      for (const row of rows) {
+        const reason = await this.handlers.filter?.(row.actionId);
+        if (reason) this.set(row.actionId, "filtered", reason);
+        else
+          selected.push({
+            actionId: row.actionId,
+            result: this.result(row.actionId),
+          });
+      }
+      if (this.stopped || !this.handlers.canDeliver()) {
+        for (const row of selected) this.set(row.actionId, "ready");
+        return;
+      }
+      if (selected.length) {
+        if (this.handlers.deliverBatch)
+          await this.handlers.deliverBatch(selected);
+        else
+          for (const row of selected)
+            await this.handlers.deliver(row.actionId, row.result);
+        for (const row of selected) this.set(row.actionId, "delivered");
+      }
+    } catch (error) {
+      for (const row of selected.length ? selected : rows)
+        this.set(
+          row.actionId,
+          "failed",
+          error instanceof Error ? error.message : "delivery_failed",
+        );
+    }
+  }
   async drain() {
     if (this.busy || this.stopped) return;
     this.busy = true;
+    const workers = new Set<Promise<void>>(),
+      deferred = new Set<string>();
+    let delivery: Promise<void> | undefined;
     try {
       while (!this.stopped) {
-        const statuses = [
-          ...(this.handlers.canUnderstand() ? ["queued"] : []),
-          ...(this.handlers.canDeliver() ? ["ready"] : []),
-        ];
-        if (!statuses.length) break;
-        const row = this.db
-          .prepare(
-            "SELECT * FROM queue WHERE status IN (" +
-              statuses.map(() => "?").join(",") +
-              ") ORDER BY seq LIMIT 1",
-          )
-          .get(...statuses) as any;
-        if (!row) break;
-        try {
-          const reason = await this.handlers.filter?.(row.actionId);
-          if (reason) {
-            this.set(row.actionId, "filtered", reason);
-            continue;
-          }
-          let result = row.result ? JSON.parse(row.result) : null;
-          if (row.status === "queued") {
-            if (!this.handlers.canUnderstand()) break;
-            const item = await this.handlers.read(row.actionId);
-            if (!item) {
-              this.set(row.actionId, "failed", "action_missing");
-              continue;
-            }
-            if (item.evidence.some((e: any) => e.status === "pending")) {
-              if (Date.now() - row.createdAt > 15000) {
-                this.set(row.actionId, "failed", "evidence_wait_timeout");
-                continue;
-              }
-              break;
-            }
+        const concurrency = Math.max(
+          1,
+          Math.min(20, this.handlers.concurrency?.() ?? 1),
+        );
+        if (this.handlers.canUnderstand()) {
+          const rows = this.db
+            .prepare(
+              "SELECT seq,actionId,createdAt FROM queue WHERE status='queued' ORDER BY seq LIMIT ?",
+            )
+            .all(concurrency + deferred.size) as any[];
+          for (const row of rows
+            .filter((row) => !deferred.has(row.actionId))
+            .slice(0, Math.max(0, concurrency - workers.size))) {
             this.set(row.actionId, "understanding");
-            this.db
-              .prepare("UPDATE queue SET attempts=attempts+1 WHERE actionId=?")
-              .run(row.actionId);
-            result = await this.handlers.understand(item);
-            this.set(row.actionId, "ready", null, result);
+            const work = this.understand(row, deferred).finally(() =>
+              workers.delete(work),
+            );
+            workers.add(work);
           }
-          if (!this.handlers.canDeliver()) continue;
-          const latestReason = await this.handlers.filter?.(row.actionId);
-          if (latestReason) {
-            this.set(row.actionId, "filtered", latestReason);
-            continue;
-          }
-          await this.handlers.deliver(row.actionId, result);
-          this.set(row.actionId, "delivered");
-        } catch (error) {
-          this.set(
-            row.actionId,
-            "failed",
-            error instanceof Error ? error.message : "queue_failed",
-          );
         }
+        if (!delivery && this.handlers.canDeliver()) {
+          // 按采集入队顺序投递；不能让快完成的后一帧越过仍在理解的前一帧。
+          const pending = this.db
+            .prepare(
+              this.handlers.deliverBatch
+                ? "SELECT seq,actionId,status FROM queue WHERE status IN ('queued','understanding','ready') ORDER BY seq LIMIT 20"
+                : "SELECT seq,actionId,status FROM queue WHERE status='ready' ORDER BY seq LIMIT 20",
+            )
+            .all() as any[];
+          const barrier = pending.findIndex((row) => row.status !== "ready");
+          const ready = pending.slice(
+            0,
+            barrier < 0 ? pending.length : barrier,
+          );
+          if (ready.length) {
+            for (const row of ready) this.set(row.actionId, "delivering");
+            delivery = this.deliver(ready).finally(() => {
+              delivery = undefined;
+            });
+          }
+        }
+        const active = [...workers, ...(delivery ? [delivery] : [])];
+        if (!active.length) break;
+        await Promise.race(active);
       }
     } finally {
+      const remaining = [...workers, ...(delivery ? [delivery] : [])];
+      if (remaining.length) await Promise.allSettled(remaining);
       this.busy = false;
-    }
-  }
-  async close() {
-    this.stopped = true;
-    while (this.busy) await new Promise((r) => setTimeout(r, 10));
-    if (!this.closed) {
-      this.db.close();
-      this.closed = true;
     }
   }
   pause() {
     this.stopped = true;
+  }
+  async close() {
+    this.pause();
+    while (this.busy) await new Promise((resolve) => setTimeout(resolve, 10));
+    if (!this.closed) {
+      this.db.close();
+      this.closed = true;
+    }
   }
 }

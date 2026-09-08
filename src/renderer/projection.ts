@@ -44,6 +44,7 @@ export function concise(value: unknown): string {
     return value == null ? "" : String(value);
   const item = value as Record<string, any>;
   for (const key of [
+    "action_title",
     "statement",
     "understanding",
     "result",
@@ -83,7 +84,7 @@ export function toolOutcome(
     if (!value || typeof value !== "object") return;
     if (
       value.isError === true ||
-      value.status === "failed" ||
+      ["failed", "unavailable", "error"].includes(value.status) ||
       value.execution_status === "failed"
     )
       failure = true;

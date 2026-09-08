@@ -30,13 +30,17 @@ const ready = new Promise<unknown>((resolve, reject) => {
       reject(new Error("bootstrap_required"));
       return;
     }
-    const { modelConfig, subagentConfig, allowedReadRoot } = raw.bootstrap;
+    const { modelConfig, subagentConfig, allowedReadRoot, prompts } =
+      raw.bootstrap;
     runtime = new ProactiveRuntime(
       root,
       (event) => process.send?.({ event }),
       Number(process.env.PROACTIVE_FIXTURE_DELAY_MS ?? 20_000),
       {
         allowedReadRoot,
+        prompts,
+        readEvidence: (actionId, part) =>
+          requestCapability({ kind: "read_evidence", actionId, part }),
         readObservation: (actionId) =>
           requestCapability({ kind: "read_observation", actionId }),
         sendDanmaku: (input) =>

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { projectBBox, projectPoint } from "./bbox.ts";
 import { ContextMenu } from "radix-ui";
 import {
@@ -38,10 +38,33 @@ export function FocusOverlay({
   const [clickColor, setClickColor] = useState("#10b981");
   const [mode, setMode] = useState("both");
   const [expanded, setExpanded] = useState(false);
-  const [zoom, setZoom] = useState(1.5);
+  const [zoom, setZoom] = useState(0);
   const [naturalWidth, setNaturalWidth] = useState(screenshot.pixelWidth ?? 0);
+  const [naturalHeight, setNaturalHeight] = useState(
+    screenshot.pixelHeight ?? 0,
+  );
+  const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
+  const [available, setAvailable] = useState({ width: 1, height: 1 });
+  useEffect(() => {
+    if (!viewport) return;
+    const observer = new ResizeObserver(([entry]) =>
+      setAvailable({
+        width: Math.max(1, entry.contentRect.width),
+        height: Math.max(1, entry.contentRect.height),
+      }),
+    );
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [viewport]);
+  const fit = Math.min(
+    Math.max(1, available.width - 4) / Math.max(1, naturalWidth),
+    Math.max(1, available.height - 4) / Math.max(1, naturalHeight),
+    1,
+  );
+  const scale = zoom || fit;
   const [copying, setCopying] = useState(false);
   const [copyStatus, setCopyStatus] = useState("");
+  const baked = screenshot.annotated === true;
   const mapped =
     screenshot.coordinateSpace === "screen_top_left_points" &&
     screenshot.shadowsExcluded === true;
@@ -109,7 +132,8 @@ export function FocusOverlay({
           style={
             large
               ? {
-                  width: (naturalWidth || screenshot.pixelWidth || 1200) * zoom,
+                  width:
+                    (naturalWidth || screenshot.pixelWidth || 1200) * scale,
                   maxWidth: "none",
                 }
               : {
@@ -121,7 +145,10 @@ export function FocusOverlay({
           tabIndex={large ? undefined : 0}
           aria-label={large ? "放大截图" : "点击放大截图"}
           onClick={() => {
-            if (!large) setExpanded(true);
+            if (!large) {
+              setZoom(0);
+              setExpanded(true);
+            }
           }}
           onKeyDown={(event) => {
             if (!large && (event.key === "Enter" || event.key === " ")) {
@@ -135,9 +162,10 @@ export function FocusOverlay({
             draggable={false}
             className="block h-auto w-full"
             src={`data:image/png;base64,${screenshot.data}`}
-            onLoad={(event) =>
-              setNaturalWidth(event.currentTarget.naturalWidth)
-            }
+            onLoad={(event) => {
+              setNaturalWidth(event.currentTarget.naturalWidth);
+              setNaturalHeight(event.currentTarget.naturalHeight);
+            }}
           />
           {enabled &&
             layers
@@ -216,68 +244,70 @@ export function FocusOverlay({
   );
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-3 text-xs">
-        <label className="flex items-center gap-1">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-          />
-          显示 bbox
-        </label>
-        <select
-          aria-label="标注范围"
-          className="rounded border bg-background p-1"
-          value={mode}
-          onChange={(e) => setMode(e.target.value)}
-        >
-          <option value="both">全部区域</option>
-          <option value="focus">仅焦点控件</option>
-          <option value="selection">仅文字选区</option>
-          <option value="click">仅点击命中</option>
-        </select>
-        <label className="flex items-center gap-1">
-          填充强度{" "}
-          <input
-            aria-label="bbox 透明度"
-            type="range"
-            min="0"
-            max="0.6"
-            step="0.01"
-            value={opacity}
-            onChange={(e) => setOpacity(Number(e.target.value))}
-          />
-          {Math.round(opacity * 100)}%（0 为仅轮廓）
-        </label>
-        <label className="flex items-center gap-1">
-          焦点颜色
-          <input
-            aria-label="焦点颜色"
-            type="color"
-            value={focusColor}
-            onChange={(e) => setFocusColor(e.target.value)}
-          />
-        </label>
-        <label className="flex items-center gap-1">
-          选区颜色
-          <input
-            aria-label="选区颜色"
-            type="color"
-            value={selectionColor}
-            onChange={(e) => setSelectionColor(e.target.value)}
-          />
-        </label>
-        <label className="flex items-center gap-1">
-          点击颜色
-          <input
-            aria-label="点击颜色"
-            type="color"
-            value={clickColor}
-            onChange={(e) => setClickColor(e.target.value)}
-          />
-        </label>
-      </div>
-      {!mapped && (
+      {!baked && (
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          <label className="flex items-center gap-1">
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => setEnabled(e.target.checked)}
+            />
+            显示 bbox
+          </label>
+          <select
+            aria-label="标注范围"
+            className="rounded border bg-background p-1"
+            value={mode}
+            onChange={(e) => setMode(e.target.value)}
+          >
+            <option value="both">全部区域</option>
+            <option value="focus">仅焦点控件</option>
+            <option value="selection">仅文字选区</option>
+            <option value="click">仅点击命中</option>
+          </select>
+          <label className="flex items-center gap-1">
+            填充强度{" "}
+            <input
+              aria-label="bbox 透明度"
+              type="range"
+              min="0"
+              max="0.6"
+              step="0.01"
+              value={opacity}
+              onChange={(e) => setOpacity(Number(e.target.value))}
+            />
+            {Math.round(opacity * 100)}%（0 为仅轮廓）
+          </label>
+          <label className="flex items-center gap-1">
+            焦点颜色
+            <input
+              aria-label="焦点颜色"
+              type="color"
+              value={focusColor}
+              onChange={(e) => setFocusColor(e.target.value)}
+            />
+          </label>
+          <label className="flex items-center gap-1">
+            选区颜色
+            <input
+              aria-label="选区颜色"
+              type="color"
+              value={selectionColor}
+              onChange={(e) => setSelectionColor(e.target.value)}
+            />
+          </label>
+          <label className="flex items-center gap-1">
+            点击颜色
+            <input
+              aria-label="点击颜色"
+              type="color"
+              value={clickColor}
+              onChange={(e) => setClickColor(e.target.value)}
+            />
+          </label>
+        </div>
+      )}
+      {!mapped && !baked && (
         <p className="text-sm text-muted-foreground">
           这份旧快照缺少准确坐标映射，请重新采集后查看 bbox。
         </p>
@@ -322,7 +352,13 @@ export function FocusOverlay({
       <p role="status" className="text-xs">
         {copying ? "正在复制…" : copyStatus}
       </p>
-      <Dialog open={expanded} onOpenChange={setExpanded}>
+      <Dialog
+        open={expanded}
+        onOpenChange={(open) => {
+          if (open) setZoom(0);
+          setExpanded(open);
+        }}
+      >
         <DialogContent className="flex h-[90vh] w-[95vw] max-w-none flex-col sm:max-w-none">
           <DialogHeader>
             <DialogTitle>截图预览</DialogTitle>
@@ -336,14 +372,22 @@ export function FocusOverlay({
               <input
                 aria-label="图片缩放"
                 type="range"
-                min="0.5"
+                min="0.01"
                 max="3"
-                step="0.25"
-                value={zoom}
+                step="0.01"
+                value={scale}
                 onChange={(event) => setZoom(Number(event.target.value))}
               />
             </label>
-            <span>{Math.round(zoom * 100)}%</span>
+            <span>
+              {Math.round(scale * 100)}%{zoom === 0 ? " · 适应窗口" : ""}
+            </span>
+            <button
+              className="rounded border px-2 py-1"
+              onClick={() => setZoom(0)}
+            >
+              适应窗口
+            </button>
             <button
               className="rounded border px-2 py-1"
               onClick={() => setZoom(1)}
@@ -352,7 +396,10 @@ export function FocusOverlay({
             </button>
             <span role="status">{copying ? "正在复制…" : copyStatus}</span>
           </div>
-          <div className="min-h-0 flex-1 overflow-auto rounded bg-muted/30 p-2">
+          <div
+            ref={setViewport}
+            className="min-h-0 flex-1 overflow-auto rounded bg-muted/30 p-2"
+          >
             {imageView(true)}
           </div>
         </DialogContent>

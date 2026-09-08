@@ -121,11 +121,25 @@ export class GeminiAdapter extends LlmAdapter {
                 id: nativeIds.get(block.toolCallId),
                 name: call.name,
                 response: {
-                  content: block.content,
+                  content: block.content.filter(
+                    (part) => part.type !== "image",
+                  ),
                   isError: block.isError ?? false,
                 },
               },
             });
+            for (const part of block.content)
+              if (part.type === "image") {
+                const image = await this.ctx.attachments.readImage(
+                  part.attachment,
+                );
+                parts.push({
+                  inlineData: {
+                    mimeType: image.ref.mediaType,
+                    data: Buffer.from(image.data).toString("base64"),
+                  },
+                });
+              }
           }
         }
       if (parts.length)

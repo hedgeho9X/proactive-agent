@@ -12,7 +12,7 @@ import { axObservation } from "../src/observation/ax-agent-bridge.ts";
 import { projectAXRecords } from "../src/renderer/ax-stream.ts";
 import { understandingSchema } from "../src/model/understanding.ts";
 
-test("默认仅Enter和空格进入Agent，保护或错位证据不可发送", () => {
+test("默认Enter、空格和点击进入理解，保护或错位证据不可发送", () => {
   for (const key of ["Enter", "NumpadEnter", "Space"])
     expect(matchesRouting({ kind: "key_down", key }, defaultRouting)).toBe(
       true,
@@ -21,7 +21,7 @@ test("默认仅Enter和空格进入Agent，保护或错位证据不可发送", (
     expect(matchesRouting({ kind: "key_down", key }, defaultRouting)).toBe(
       false,
     );
-  expect(matchesRouting({ kind: "click" }, defaultRouting)).toBe(false);
+  expect(matchesRouting({ kind: "click" }, defaultRouting)).toBe(true);
   expect(matchesRouting({ kind: "click" }, ["click"])).toBe(true);
   expect(
     matchesRouting({ kind: "key_down", key: "C", modifiers: ["Cmd"] }, [

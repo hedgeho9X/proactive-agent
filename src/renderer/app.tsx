@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AXRecordDetails } from "./ax-record-details.tsx";
+import { PromptSettings } from "./prompt-settings.tsx";
 import { FocusOverlay } from "./focus-overlay.tsx";
 import { projectAXRecords } from "./ax-stream.ts";
 import {
@@ -12,6 +13,7 @@ import {
   ArrowUp,
   ChevronRight,
   Copy,
+  LoaderCircle,
   Settings2,
   MousePointer2,
   Sparkles,
@@ -118,6 +120,7 @@ const statusNames: Record<string, string> = {
   timed_out: "超时",
   interrupted: "已中断",
   completed: "完成",
+  delivering: "主 Agent 处理中",
 };
 const statusText = (status?: string) =>
   status ? (statusNames[status] ?? status) : "—";
@@ -429,7 +432,7 @@ function App() {
   const [settings, setSettings] = useState(false);
   const [axRecords, setAXRecords] = useState<any[]>([]);
   const [eventFilter, setEventFilter] = useState("");
-  const [sourceFilter, setSourceFilter] = useState("all");
+  const [sourceFilter, setSourceFilter] = useState("understood");
   const [captureApps, setCaptureApps] = useState<any[]>([]);
   const [manualPid, setManualPid] = useState("");
   const [selected, setSelected] = useState<StreamRow | null>(null);
@@ -577,14 +580,21 @@ function App() {
           : action.policy_status),
     };
   });
-  const axRows = projectAXRecords(axRecords).map((row) => ({
-    ...row,
-    text:
-      row.text +
-      (queue.get(row.id)?.status
-        ? ` · Agent ${statusText(queue.get(row.id).status)}`
-        : ""),
-  }));
+  const axRows = projectAXRecords(axRecords).map((row) => {
+    const item = queue.get(row.id);
+    return {
+      ...row,
+      status: item?.status ?? row.status,
+      text: item?.actionTitle
+        ? `${item.actionTitle} · ${item.actionDetail}`
+        : row.text,
+      detail: {
+        ...row.detail,
+        actionTitle: item?.actionTitle,
+        actionDetail: item?.actionDetail,
+      },
+    };
+  });
   const axIds = new Set(axRecords.map((record) => record.id));
   const rows = [
     ...actions.filter((row) => !axIds.has(row.id)),
@@ -593,10 +603,11 @@ function App() {
   ]
     .filter(
       (row) =>
-        (sourceFilter === "all" ||
-          (sourceFilter === "evidence"
+        (sourceFilter === "understood"
+          ? !!row.detail?.actionTitle
+          : sourceFilter === "queue"
             ? !!row.detail?.axRecord
-            : !row.detail?.axRecord)) &&
+            : !row.detail?.axRecord && row.kind !== "action") &&
         (!eventFilter ||
           [row.label, row.text, row.id]
             .join(" ")
@@ -672,6 +683,9 @@ function App() {
           <span className="truncate">{row.label}</span>
         </span>
         <span className="event-summary truncate">{row.text || "—"}</span>
+        {["understanding", "delivering"].includes(row.status ?? "") && (
+          <LoaderCircle className="size-4 animate-spin" aria-label="处理中" />
+        )}
         {row.fixture && <Badge variant="outline">合成</Badge>}
         <Badge variant={row.status === "failed" ? "destructive" : "ghost"}>
           {statusText(row.status)}
@@ -714,6 +728,7 @@ function App() {
         data-tone={row.kind === "action" ? "observation" : "agent"}
         data-selected={selected?.id === row.id}
         data-child={child}
+        data-action-id={row.id}
         onClick={() => select(row)}
       >
         {content}
@@ -765,10 +780,21 @@ function App() {
             value={sourceFilter}
             onChange={(e) => setSourceFilter(e.target.value)}
           >
-            <option value="all">全部事件</option>
-            <option value="evidence">操作与证据</option>
-            <option value="agent">Agent 与历史观察</option>
+            <option value="understood">已理解事件</option>
+            <option value="queue">队列／原始记录</option>
+            <option value="agent">主 Agent／工具</option>
           </select>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() =>
+              setSourceFilter(sourceFilter === "queue" ? "understood" : "queue")
+            }
+          >
+            {sourceFilter === "queue"
+              ? "返回已理解事件"
+              : `队列／原始记录（${axRows.filter((row) => !row.detail.actionTitle).length}）`}
+          </Button>
           <Button
             size="sm"
             variant="ghost"
@@ -782,7 +808,7 @@ function App() {
             {state.clearing ? "正在清空…" : "清空全部本地历史"}
           </Button>
           <span className="text-xs text-muted-foreground">
-            显示最近 500 条匹配记录；仅选中触发操作进入 Agent
+            主列表仅显示理解完成的事件；原始证据与失败可在队列查看
           </span>
         </div>
         <Separator />
@@ -912,6 +938,11 @@ function App() {
           }}
         >
           <SheetContent
+            onInteractOutside={(event) => {
+              // 点另一事件时仅切换详情，空白区域仍按默认行为关闭。
+              if ((event.target as Element)?.closest?.(".event-row"))
+                event.preventDefault();
+            }}
             className={
               currentRow?.detail?.axRecord
                 ? "w-[75vw] gap-0 sm:max-w-none"
@@ -919,7 +950,11 @@ function App() {
             }
           >
             <SheetHeader>
-              <SheetTitle>{currentRow?.label ?? "事件详情"}</SheetTitle>
+              <SheetTitle>
+                {currentRow?.detail?.actionTitle ??
+                  currentRow?.label ??
+                  "事件详情"}
+              </SheetTitle>
               <SheetDescription>
                 {currentRow?.time} · {statusText(currentRow?.status)}
               </SheetDescription>
@@ -1225,6 +1260,12 @@ function App() {
                 </TabsContent>
               ))}
             </Tabs>
+            <Separator />
+            <PromptSettings
+              values={state.prompts}
+              concurrency={state.aiConcurrency ?? 10}
+              save={act}
+            />
             <Separator />
             <div className="flex flex-col gap-2">
               <p className="text-sm text-muted-foreground">

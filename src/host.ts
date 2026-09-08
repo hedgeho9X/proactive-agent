@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { resolve } from "node:path";
 import type { ModelConfig } from "./model/gemini.ts";
 import { parseDanmaku, type DanmakuInput } from "./model/danmaku.ts";
+import type { RuntimeCapabilities } from "./model/tools.ts";
 // 宿主拥有 sidecar 生命周期；丢失 IPC 时子进程自行停止所有 DSH 活动。
 export class RuntimeHost extends EventEmitter {
   readonly child: ChildProcess;
@@ -30,6 +31,8 @@ export class RuntimeHost extends EventEmitter {
       allowedReadRoot,
       readObservation,
       sendDanmaku,
+      readEvidence,
+      prompts,
     }: {
       resume?: boolean;
       delayMs?: number;
@@ -41,6 +44,8 @@ export class RuntimeHost extends EventEmitter {
       allowedReadRoot?: string;
       readObservation?: (id: string) => Promise<unknown>;
       sendDanmaku?: (input: DanmakuInput) => Promise<unknown>;
+      readEvidence?: RuntimeCapabilities["readEvidence"];
+      prompts?: RuntimeCapabilities["prompts"];
     } = {},
   ) {
     super();
@@ -56,7 +61,7 @@ export class RuntimeHost extends EventEmitter {
     });
     this.child.once("spawn", () =>
       this.child.send({
-        bootstrap: { modelConfig, subagentConfig, allowedReadRoot },
+        bootstrap: { modelConfig, subagentConfig, allowedReadRoot, prompts },
       }),
     );
     this.child.on("message", async (raw: any) => {
@@ -64,7 +69,14 @@ export class RuntimeHost extends EventEmitter {
       try {
         const request = raw.toolRequest;
         let result: unknown;
-        if (request.kind === "send_danmaku")
+        if (
+          request.kind === "read_evidence" &&
+          ["ax", "ocr", "image"].includes(request.part)
+        )
+          result = readEvidence
+            ? await readEvidence(request.actionId, request.part)
+            : { status: "unavailable" };
+        else if (request.kind === "send_danmaku")
           result = sendDanmaku
             ? await sendDanmaku(parseDanmaku(request.input))
             : { status: "unavailable" };

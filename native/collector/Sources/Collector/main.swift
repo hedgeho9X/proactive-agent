@@ -149,6 +149,7 @@ final class Collector: @unchecked Sendable {
         } catch { if !screenshotEmitted { missing(id,"screenshot","unavailable",String(describing:error)) }; missing(id,"ocr","unavailable","capture_or_ocr_failed") } }
     }
 }
+if CommandLine.arguments.contains("--prepare-evidence") { prepareEvidence(); exit(0) }
 if CommandLine.arguments.contains("--inspect-apps") { emit(["apps":inspectorApps()]); exit(0) }
 if CommandLine.arguments.contains("--inspect-stream") {
     _ = NSApplication.shared

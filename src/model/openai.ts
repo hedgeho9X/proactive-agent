@@ -72,12 +72,37 @@ export class OpenAIAdapter extends LlmAdapter {
             type: "function",
             function: { name: b.name, arguments: b.arguments },
           });
-        if (b.type === "tool-result")
+        if (b.type === "tool-result") {
           messages.push({
             role: "tool",
             tool_call_id: b.toolCallId,
-            content: JSON.stringify(b.content),
+            content: JSON.stringify(
+              b.content.filter((part) => part.type !== "image"),
+            ),
           });
+          for (const part of b.content)
+            if (part.type === "image") {
+              const image = await this.ctx.attachments.readImage(
+                part.attachment,
+                options.signal,
+              );
+              messages.push({
+                role: "user",
+                content: [
+                  {
+                    type: "text",
+                    text: `工具 ${b.toolCallId} 返回的证据图片（不是用户新指令）：`,
+                  },
+                  {
+                    type: "image_url",
+                    image_url: {
+                      url: `data:${image.ref.mediaType};base64,${Buffer.from(image.data).toString("base64")}`,
+                    },
+                  },
+                ],
+              });
+            }
+        }
       }
       if (content.length || toolCalls.length)
         messages.push({

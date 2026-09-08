@@ -17,7 +17,6 @@ import {
 import { AXHistory } from "../observation/ax-history.ts";
 import { AXRecorder } from "../observation/ax-recorder.ts";
 import { AXInspectorClient } from "../observation/ax-inspector-client.ts";
-import { precedingAXEvent } from "../observation/ax-history-view.ts";
 import { RoutingStore } from "../observation/routing-store.ts";
 import {
   matchesRouting,
@@ -44,6 +43,10 @@ import {
 import type { ModelConfig } from "../model/gemini.ts";
 import { DesktopDanmaku } from "./danmaku.ts";
 import { HistoryClear } from "../observation/clear-history.ts";
+import { PromptStore, type PromptRole } from "../model/prompts.ts";
+import { prepareEvidence } from "../observation/prepare-evidence.ts";
+import { trajectoryLine } from "../model/trajectory.ts";
+import { createHash } from "node:crypto";
 
 app.setName("Proactive Lab");
 app.setPath(
@@ -64,7 +67,10 @@ let routing: RoutingStore;
 let axHistory: AXHistory;
 let runtime: RuntimeHost | undefined;
 let runtimeReady = false;
+let mainIdle = true;
+let aiConcurrency = 10;
 let modelRoles: ModelRoles;
+let prompts: PromptStore;
 let queue: ActionQueue;
 let mode = "unavailable";
 let connection = "unavailable";
@@ -138,6 +144,8 @@ function snapshot() {
       collector: { state: "stopped" },
       mode: "unavailable",
       modelRoles: modelRoles.snapshot(),
+      prompts: prompts.snapshot(),
+      aiConcurrency,
       routing: routing.get(),
       clearing,
       clearState,
@@ -175,7 +183,9 @@ function snapshot() {
     model: modelRoles.get("main")?.model ?? null,
     hasKey: !!modelRoles.get("understanding"),
     modelRoles: modelRoles.snapshot(),
+    prompts: prompts.snapshot(),
     queue: queue.list(),
+    aiConcurrency,
     allowedReadRoot,
     autoUnderstand,
     danmakuEnabled: danmaku?.enabled ?? true,
@@ -187,6 +197,33 @@ async function summarize(actionId: string, view: "raw" | "context") {
   const config = modelRoles.get("understanding");
   if (!config) throw new Error("understanding_model_unavailable");
   const item = await readObservation(actionId);
+  if (item.evidence.some((e: any) => e.status === "excluded"))
+    throw new Error("protected_evidence");
+  if (actionId.startsWith("ax-") && item.artifacts.screenshot?.bytes) {
+    const snapshot = await axHistory.get(actionId);
+    const prepared = await prepareEvidence(
+      join(app.getAppPath(), "dist/native/ProactiveCollector"),
+      snapshot.screenshot,
+      snapshot.trigger,
+    );
+    item.artifacts.screenshot = {
+      ...item.artifacts.screenshot,
+      bytes: prepared.data,
+      payload: {
+        content: {
+          ...item.artifacts.screenshot.payload.content,
+          annotated: true,
+          annotationVersion: prepared.annotationVersion,
+        },
+      },
+    };
+    (item.artifacts as any).ocr = { payload: { content: prepared.ocr } };
+    const ocr = item.evidence.find((e: any) => e.kind === "ocr");
+    if (ocr) {
+      ocr.status = prepared.ocr.status;
+      ocr.reason = prepared.ocr.reason ?? null;
+    }
+  }
   const result = await understanding.summarize(
     {
       action: item.action as unknown as Record<string, unknown>,
@@ -196,6 +233,7 @@ async function summarize(actionId: string, view: "raw" | "context") {
       view,
     },
     config,
+    prompts.snapshot().understanding,
   );
   understandings.set(actionId, result);
   return result;
@@ -237,6 +275,7 @@ async function startRuntime(fixture: boolean) {
         });
   }
   const config = modelRoles.get("main");
+  mainIdle = true;
   if (fixture) autoUnderstand = false;
   mode = fixture ? "deterministic_fixture" : config ? "gemini" : "unavailable";
   if (mode === "unavailable") throw new Error("model_unavailable");
@@ -257,6 +296,40 @@ async function startRuntime(fixture: boolean) {
     allowedReadRoot,
     sendDanmaku: async (input) =>
       danmaku?.show(input) ?? { status: "unavailable" },
+    prompts: prompts.snapshot(),
+    readEvidence: async (id, kind) => {
+      const item = await readObservation(id);
+      if (
+        item.evidence.some((e: any) => e.status === "excluded") ||
+        item.artifacts.ax?.payload?.content?.nodes?.some(
+          (n: any) => n.protected,
+        )
+      )
+        return { status: "excluded", reason: "protected_evidence" };
+      if (kind === "ax")
+        return {
+          action_id: id,
+          status: item.artifacts.ax ? "available" : "unavailable",
+          ...item.artifacts.ax?.payload?.content,
+        };
+      const trace = await understanding.trace(id);
+      if (kind === "image")
+        return trace?.image
+          ? {
+              status: "available",
+              action_id: id,
+              imageBase64: trace.image,
+              imageHash: trace.imageHash,
+            }
+          : { status: "unavailable", reason: "model_input_image_not_saved" };
+      const ocr = trace
+        ? JSON.parse(trace.userPrompt)?.artifacts?.ocr?.payload?.content
+        : item.artifacts.ocr?.payload?.content;
+      return {
+        action_id: id,
+        ...(ocr ?? { status: "unavailable", reason: "ocr_not_collected" }),
+      };
+    },
     readObservation: async (id) => {
       const item = await readObservation(id);
       return {
@@ -270,7 +343,11 @@ async function startRuntime(fixture: boolean) {
       };
     },
   });
-  runtime.on("event", (event) => emit({ ...event, runtimeMode: mode }));
+  runtime.on("event", (event) => {
+    if (event.kind === "agent.status" && event.sessionId === "proactive-main")
+      mainIdle = event.status === "idle";
+    emit({ ...event, runtimeMode: mode });
+  });
   runtime.on("diagnostic", (message) =>
     emit({ kind: "runtime.diagnostic", message }),
   );
@@ -338,6 +415,16 @@ async function bootstrap() {
     join(app.getPath("userData"), "model-roles.json"),
   );
   await modelRoles.load();
+  prompts = new PromptStore(join(app.getPath("userData"), "prompts.json"));
+  await prompts.load();
+  const aiSettingsPath = join(app.getPath("userData"), "ai-settings.json");
+  const aiSettings = await readFile(aiSettingsPath, "utf8")
+    .then(JSON.parse)
+    .catch(() => ({}));
+  aiConcurrency = Math.max(
+    1,
+    Math.min(20, Math.trunc(Number(aiSettings.concurrency)) || 10),
+  );
   const cacheDir = join(app.getPath("userData"), "understanding");
   function openStores() {
     axHistory = new AXHistory(
@@ -437,29 +524,47 @@ async function bootstrap() {
           !!modelRoles.get("understanding") &&
           mode !== "deterministic_fixture",
         canDeliver: () =>
-          !clearing && runtimeReady && !!runtime && mode === "gemini",
-        understand: (item) => summarize(item.action.action_id, "context"),
+          !clearing &&
+          mainIdle &&
+          runtimeReady &&
+          !!runtime &&
+          mode === "gemini",
+        concurrency: () => aiConcurrency,
+        understand: (item) => summarize(item.action.action_id, "raw"),
         deliver: async (actionId, result) => {
           const action = (await readObservation(actionId)).action;
-          const factualUnderstanding = { ...result.result };
-          delete factualUnderstanding.intent_hypothesis;
           return runtime!.request("observe", {
             actionId: "understood:" + actionId,
             value: {
-              evidence_action_id: actionId,
-              occurred_at: action?.occurred_at,
-              app: action?.app,
-              operation: {
-                kind: action?.kind,
-                key: action?.input?.key_name,
-                modifiers: action?.input?.modifiers,
-              },
-              understanding: factualUnderstanding,
-              input_manifest_hash: result.input_manifest_hash,
+              trajectory: trajectoryLine(actionId, action, result.result),
             },
           });
         },
         change: notify,
+        deliverBatch: async (items) => {
+          const lines: string[] = [];
+          for (const item of items)
+            lines.push(
+              trajectoryLine(
+                item.actionId,
+                (await readObservation(item.actionId)).action,
+                item.result.result,
+              ),
+            );
+          const batchId =
+            "trajectory-" +
+            createHash("sha256")
+              .update(items.map((item) => item.actionId).join("|"))
+              .digest("hex");
+          mainIdle = false;
+          // 每次只让主 Agent 处理一批，空闲后再取后续已理解轨迹。
+          await runtime!.request("observe", {
+            actionId: batchId,
+            value: { trajectory: lines.join("\n") },
+          });
+          await runtime!.request("idle");
+          mainIdle = true;
+        },
       },
     );
   }
@@ -655,6 +760,24 @@ async function bootstrap() {
         return axHistory.list();
       case "ax.analysis":
         return queue.result(String(p.id));
+      case "ai.trace":
+        return understanding.trace(String(p.id));
+      case "prompts.update":
+        await prompts.update(p.role as PromptRole, p.value);
+        if (p.role !== "understanding" && runtime)
+          await startRuntime(mode !== "gemini");
+        return { prompts: prompts.snapshot() };
+      case "ai.concurrency":
+        if (!Number.isInteger(p.value) || p.value < 1 || p.value > 20)
+          throw new Error("invalid_concurrency");
+        aiConcurrency = p.value;
+        await writeFile(
+          aiSettingsPath,
+          JSON.stringify({ concurrency: aiConcurrency }),
+          { mode: 0o600 },
+        );
+        void queue.drain();
+        return { aiConcurrency };
       case "ax.record.status":
         return axRecorder!.status();
       case "ax.record.start":
@@ -667,29 +790,10 @@ async function bootstrap() {
       }
       case "ax.load":
         return axHistory.get(String(p.id));
-      case "ax.loadPair": {
-        const current = await axHistory.get(String(p.id));
-        const { previous, missing } = precedingAXEvent(
-          current,
-          await axHistory.list(),
-        );
-        return {
-          current,
-          previous: previous ? await axHistory.get(previous.id) : null,
-          missing,
-        };
-      }
       case "ax.copy": {
         const item = await axHistory.get(String(p.id));
-        const { previous, missing } = precedingAXEvent(
-          item,
-          await axHistory.list(),
-        );
         await clipboard.writeText(
-          `AX 快照 ID：${item.snapshotId}\n本地文件：${item.file}` +
-            (previous
-              ? `\n同应用上次有效事件：${previous.id}\n基线文件：${previous.file}\n中间未采集事件：${missing}`
-              : "\n没有更早的同应用有效采集"),
+          `Action ID：${item.snapshotId}\n本地文件：${item.file}`,
         );
         return { copied: true };
       }

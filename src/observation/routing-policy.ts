@@ -8,7 +8,7 @@ export const routingOptions = [
   { id: "shortcuts", label: "组合快捷键", keys: [] },
   { id: "click", label: "鼠标点击", keys: [] },
 ];
-export const defaultRouting = ["enter", "space"];
+export const defaultRouting = ["enter", "space", "click"];
 export function matchesRouting(trigger: any, selected: string[]) {
   if (!trigger) return false;
   if (["click", "mouse_down"].includes(trigger.kind))

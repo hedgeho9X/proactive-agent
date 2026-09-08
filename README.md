@@ -23,6 +23,12 @@ API Key 仅保留在本次进程内存；本应用不读取旧应用配置。文
 
 主页面「清空全部本地历史」会在确认后自动停止采集和 Agent，清空截图/AX、旧观察流水、理解缓存、待处理队列和 Agent 会话，保留模型配置及系统权限。旧数据整体移到废纸篓，可恢复。界面显示清理阶段、完成结果；移入废纸篓失败时可重试，重试不会删除新记录。详见 [清空验证与恢复方式](docs/CLEAR-HISTORY-VERIFICATION.md)。
 
+## 当前动作理解与 Agent 轨迹
+
+主列表仅展示理解完成的 `Action title / Action detail`；「队列／原始记录」查看处理中、失败和未选中的原始证据，「主 Agent／工具」查看主动提议与工具轨迹。侧栏的「AI 理解追踪」展示实际中文 Prompt、模型输入图片、完整输入和输出。前后 Diff 已移除，跨卡片直接切换侧栏，图片默认适应窗口。
+
+设置中可编辑三角色中文 Prompt，理解并发默认 10。主 Agent 按批次接收带时间和 Action ID 的摘要，可按 ID 取 AX/OCR/标注图，并通过弹幕提出建议。默认新触发配置包含 Enter、空格与点击，已有自定义配置不会覆盖。完整行为和验证边界见 [当前动作理解](docs/ACTION-UNDERSTANDING.md)。
+
 - [需求](docs/PRD.md)
 - [实施进度](docs/IMPLEMENTATION-STATUS.md)
 - [S0 验证](docs/S0-RUNTIME-VERIFICATION.md)
