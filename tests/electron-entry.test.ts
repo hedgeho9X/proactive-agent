@@ -30,7 +30,7 @@ test("Electron ESM入口在ready尚未触发时也能完成模块求值", () => 
       const app={setName(){},setPath(){},getPath(){return '/private/tmp/proactive-mock';},requestSingleInstanceLock(){return true;},on(){},whenReady(){return new Promise(()=>{});}};
       const entry=new SourceTextModule(readFileSync(${JSON.stringify(outfile)},'utf8'));
       await entry.link(async name=>{
-        const exports=name==='electron'?{app,BrowserWindow:class{},ipcMain:{},dialog:{},shell:{},clipboard:{},nativeImage:{},ClipboardItem:class{},screen:{}}:await import(name);
+        const exports=name==='electron'?{app,BrowserWindow:class{},ipcMain:{},dialog:{},shell:{},clipboard:{},nativeImage:{},ClipboardItem:class{},screen:{},safeStorage:{isEncryptionAvailable(){throw new Error('keychain_access_before_ready');}}}:await import(name);
         return new SyntheticModule(Object.keys(exports),function(){for(const [key,value] of Object.entries(exports))this.setExport(key,value);});
       });
       await Promise.race([entry.evaluate(),new Promise((_,reject)=>setTimeout(()=>reject(new Error('entry_waits_for_ready')),500))]);

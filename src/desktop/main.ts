@@ -48,6 +48,7 @@ import { prepareEvidence } from "../observation/prepare-evidence.ts";
 import { trajectoryLine } from "../model/trajectory.ts";
 import { createHash } from "node:crypto";
 import { captureDiagnostic } from "../observation/capture-diagnostics.ts";
+import { desktopCredentials } from "./credentials.ts";
 
 app.setName("Proactive Lab");
 app.setPath(
@@ -414,6 +415,7 @@ async function bootstrap() {
   await routing.load();
   modelRoles = new ModelRoles(
     join(app.getPath("userData"), "model-roles.json"),
+    desktopCredentials,
   );
   await modelRoles.load();
   prompts = new PromptStore(join(app.getPath("userData"), "prompts.json"));
@@ -1087,6 +1089,15 @@ async function bootstrap() {
   );
   await refreshPermissions();
   console.error("[proactive] bootstrap:window-loaded");
+  // 恢复加密凭证后也恢复主 Agent 投递能力，避免重启后只有理解队列在工作。
+  if (!runtime && modelRoles.get("main"))
+    await startRuntime(false).catch(() => {
+      emit({
+        kind: "runtime.start_failed",
+        message:
+          "主 Agent 启动失败，请检查模型设置后重新保存；本地记录仍保留。",
+      });
+    });
 }
 app.on("window-all-closed", () => app.quit());
 if (ownsDataDirectory)
