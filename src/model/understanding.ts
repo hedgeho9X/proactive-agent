@@ -316,7 +316,14 @@ export class UnderstandingService {
       this.emit({
         kind: "understanding.completed",
         actionId: input.action.action_id,
-        ...record,
+        // 高频事件总线只发布轻量摘要；完整输入留在 trace/SQLite 按 ID 读取。
+        result,
+        model: record.model,
+        model_role: record.model_role,
+        created_at: record.created_at,
+        usage: record.usage,
+        input_manifest_hash: hash,
+        elapsedMs: record.debug.elapsedMs,
       });
       return record;
     } catch (error) {

@@ -11,6 +11,8 @@ import { randomUUID } from "node:crypto";
 
 // 一份快照一个目录，元数据与完整 JSON 原子发布，列表不读取大型截图正文。
 export class AXHistory {
+  private metadata = new Map<string, any>();
+  private listing: Promise<any[]> | undefined;
   constructor(
     readonly root: string,
     private trash: (path: string) => Promise<void>,
@@ -65,6 +67,7 @@ export class AXHistory {
       mode: 0o600,
     });
     await rename(pending, target);
+    this.metadata.set(id, meta);
     return { ...value, file: meta.file };
   }
   async update(id: string, snapshot: any) {
@@ -96,9 +99,18 @@ export class AXHistory {
       mode: 0o600,
     });
     await rename(join(path, "meta.next"), join(path, "meta.json"));
+    this.metadata.set(id, meta);
     return value;
   }
   async list() {
+    // 并发窗口请求共享一次目录扫描，避免多个调用重复读同一批元数据。
+    if (!this.listing)
+      this.listing = this.readList().finally(() => {
+        this.listing = undefined;
+      });
+    return this.listing;
+  }
+  private async readList() {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
     const rows: any[] = [];
     for (const entry of await readdir(this.root, { withFileTypes: true })) {
@@ -109,16 +121,24 @@ export class AXHistory {
         )
       )
         continue;
+      const cached = this.metadata.get(entry.name);
+      if (cached) {
+        rows.push(cached);
+        continue;
+      }
       try {
         const path = await this.existing(entry.name);
         const meta = JSON.parse(
           await readFile(join(path, "meta.json"), "utf8"),
         );
-        rows.push({
+        const row = {
           ...meta,
           id: entry.name,
           file: join(path, "snapshot.json"),
-        });
+        };
+        // 读取期间采集完成时，以写入路径刚发布的新状态为准。
+        if (!this.metadata.has(entry.name)) this.metadata.set(entry.name, row);
+        rows.push(this.metadata.get(entry.name));
       } catch {
         // 损坏的元数据也占据历史空间，保留固定 ID，允许一键清理。
         rows.push({
@@ -143,6 +163,7 @@ export class AXHistory {
   }
   async remove(id: string) {
     await this.trash(await this.existing(id));
+    this.metadata.delete(id);
   }
   async clear() {
     const rows = await this.list();

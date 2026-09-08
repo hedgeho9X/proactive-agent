@@ -70,3 +70,34 @@ test("AX快照重开、完整截图、ID约束与清理隔离", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("元数据热缓存随采集完成更新，列表不复读旧记录且能发现外部增删", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ax-metadata-"));
+  try {
+    const history = new AXHistory(root, (path) =>
+      rm(path, { recursive: true }),
+    );
+    const saved = await history.save({ nodes: [], captureStatus: "pending" });
+    const cold = new AXHistory(root, (path) => rm(path, { recursive: true }));
+    const first = (await cold.list())[0];
+    // 缓存命中保留同一个轻量对象；原图和 AX 正文不进入列表缓存。
+    expect((await cold.list())[0]).toBe(first);
+    await cold.update(saved.snapshotId, {
+      nodes: [{ id: "n1" }],
+      captureStatus: "captured",
+      screenshot: { status: "captured", data: "fixture" },
+    });
+    const completed = (await cold.list())[0];
+    expect(completed.hasScreenshot).toBe(true);
+    expect(completed.nodes).toBe(1);
+    expect(completed.screenshot).toBeUndefined();
+    const other = await history.save({ nodes: [] });
+    expect((await cold.list()).length).toBe(2);
+    await history.remove(other.snapshotId);
+    expect((await cold.list()).length).toBe(1);
+    await cold.remove(saved.snapshotId);
+    expect(await cold.list()).toEqual([]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

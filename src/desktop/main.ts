@@ -89,7 +89,12 @@ const events: any[] = [];
 const understandings = new Map<string, unknown>();
 let sequence = 0;
 function notify() {
-  if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
+  if (
+    window &&
+    !window.isDestroyed() &&
+    !window.webContents.isDestroyed() &&
+    !window.webContents.isCrashed()
+  )
     window.webContents.send("proactive:event");
 }
 function emit(event: any) {
@@ -198,15 +203,18 @@ let understanding: UnderstandingService;
 async function summarize(actionId: string, view: "raw" | "context") {
   const config = modelRoles.get("understanding");
   if (!config) throw new Error("understanding_model_unavailable");
-  const item = await readObservation(actionId);
+  // AX 记录已包含截图，避免同一次理解读取、解析两遍完整快照。
+  const axSnapshot = actionId.startsWith("ax-")
+    ? await axHistory.get(actionId)
+    : undefined;
+  const item = axSnapshot ? axObservation(axSnapshot) : observation(actionId);
   if (item.evidence.some((e: any) => e.status === "excluded"))
     throw new Error("protected_evidence");
   if (actionId.startsWith("ax-") && item.artifacts.screenshot?.bytes) {
-    const snapshot = await axHistory.get(actionId);
     const prepared = await prepareEvidence(
       join(app.getAppPath(), "dist/native/ProactiveCollector"),
-      snapshot.screenshot,
-      snapshot.trigger,
+      axSnapshot.screenshot,
+      axSnapshot.trigger,
     );
     item.artifacts.screenshot = {
       ...item.artifacts.screenshot,
@@ -237,7 +245,12 @@ async function summarize(actionId: string, view: "raw" | "context") {
     config,
     prompts.snapshot().understanding,
   );
-  understandings.set(actionId, result);
+  // 常驻内存只留摘要；原始 Prompt、AX、截图与响应从 trace/队列按需加载。
+  understandings.set(actionId, {
+    result: result.result,
+    model: result.model,
+    created_at: result.created_at,
+  });
   return result;
 }
 function admit(action: any) {

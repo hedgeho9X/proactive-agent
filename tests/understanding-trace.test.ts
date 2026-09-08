@@ -35,7 +35,8 @@ test("理解追踪保留真实中文输入、图片、输出；改 Prompt 不复
       });
     },
   });
-  const service = new UnderstandingService(root, () => {});
+  const events: any[] = [];
+  const service = new UnderstandingService(root, (event) => events.push(event));
   const config = {
     protocol: "openai-compatible" as const,
     model: "fixture",
@@ -62,6 +63,14 @@ test("理解追踪保留真实中文输入、图片、输出；改 Prompt 不复
     expect(trace.image).toBe(image);
     expect(requests[0].messages[1].content[1].image_url.url).toEndWith(image);
     expect(JSON.stringify(trace)).not.toContain("fixture-secret");
+    const completed = events.find(
+      (event) => event.kind === "understanding.completed",
+    );
+    expect(completed.result).toEqual(result.result);
+    expect(completed.manifest).toBeUndefined();
+    expect(completed.debug).toBeUndefined();
+    expect(JSON.stringify(completed)).not.toContain(image);
+    expect(JSON.stringify(completed).length).toBeLessThan(2048);
     await service.summarize(input, config);
     expect(requests.length).toBe(1);
     await service.summarize(

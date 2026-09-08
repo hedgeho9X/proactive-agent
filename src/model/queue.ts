@@ -12,6 +12,9 @@ export class ActionQueue {
   private busy = false;
   private stopped = false;
   private closed = false;
+  // 热路径只保留列表字段；完整模型输入、AX 和图片仍在 SQLite 按 ID 读取。
+  private summaries = new Map<string, any>();
+  private summaryRows: any[] | undefined;
   constructor(
     path: string,
     private handlers: {
@@ -32,6 +35,17 @@ export class ActionQueue {
     this.db.exec(
       "PRAGMA journal_mode=WAL;CREATE TABLE IF NOT EXISTS queue(seq INTEGER PRIMARY KEY AUTOINCREMENT,actionId TEXT UNIQUE,status TEXT,reason TEXT,attempts INTEGER DEFAULT 0,result TEXT,createdAt INTEGER);UPDATE queue SET status='queued',reason='interrupted' WHERE status='understanding';UPDATE queue SET status='ready',reason='delivery_interrupted' WHERE status='delivering'",
     );
+    // 覆盖调度查询，避免取待处理状态时遍历带有大型 result 的数据页。
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS queue_schedule ON queue(status,seq,actionId,createdAt)",
+    );
+    // 只在打开数据库时投影一次旧结果，之后由写入路径逐条更新摘要。
+    for (const row of this.db
+      .prepare(
+        "SELECT seq,actionId,status,reason,attempts,createdAt,json_extract(result,'$.result.action_title') AS actionTitle,json_extract(result,'$.result.action_detail') AS actionDetail,json_extract(result,'$.debug.imageFile') AS inputImageFile FROM queue ORDER BY seq",
+      )
+      .all() as any[])
+      this.summaries.set(row.actionId, row);
   }
   enqueue(actionId: string, reason?: string) {
     this.db
@@ -44,16 +58,35 @@ export class ActionQueue {
         reason ?? null,
         Date.now(),
       );
+    if (!this.summaries.has(actionId)) this.refreshSummary(actionId);
     this.handlers.change();
     void this.drain();
   }
   list() {
-    // 主列表只读取摘要，不把整份 Prompt/AX/响应反复传到渲染层。
-    return this.db
+    return (this.summaryRows ??= [...this.summaries.values()]);
+  }
+  private refreshSummary(id: string, result?: any) {
+    const row = this.db
       .prepare(
-        "SELECT seq,actionId,status,reason,attempts,createdAt,json_extract(result,'$.result.action_title') AS actionTitle,json_extract(result,'$.result.action_detail') AS actionDetail,json_extract(result,'$.debug.imageFile') AS inputImageFile FROM queue ORDER BY seq",
+        "SELECT seq,actionId,status,reason,attempts,createdAt FROM queue WHERE actionId=?",
       )
-      .all();
+      .get(id);
+    if (!row) return;
+    this.summaries.set(id, {
+      actionTitle: null,
+      actionDetail: null,
+      inputImageFile: null,
+      ...this.summaries.get(id),
+      ...row,
+      ...(result !== undefined
+        ? {
+            actionTitle: result?.result?.action_title ?? null,
+            actionDetail: result?.result?.action_detail ?? null,
+            inputImageFile: result?.debug?.imageFile ?? null,
+          }
+        : {}),
+    });
+    this.summaryRows = undefined;
   }
   result(id: string) {
     const row = this.db
@@ -67,6 +100,7 @@ export class ActionQueue {
         "UPDATE queue SET status=CASE WHEN result IS NULL THEN 'queued' ELSE 'ready' END,reason=NULL WHERE actionId=? AND status='failed'",
       )
       .run(id);
+    this.refreshSummary(id);
     this.handlers.change();
     void this.drain();
   }
@@ -84,6 +118,7 @@ export class ActionQueue {
       this.db
         .prepare("UPDATE queue SET status=?,reason=? WHERE actionId=?")
         .run(status, reason, id);
+    this.refreshSummary(id, result);
     this.handlers.change();
   }
   private async understand(row: any, deferred: Set<string>) {
@@ -105,6 +140,7 @@ export class ActionQueue {
       this.db
         .prepare("UPDATE queue SET attempts=attempts+1 WHERE actionId=?")
         .run(row.actionId);
+      this.refreshSummary(row.actionId);
       const result = await this.handlers.understand(item);
       this.set(row.actionId, "ready", null, result);
     } catch (error) {

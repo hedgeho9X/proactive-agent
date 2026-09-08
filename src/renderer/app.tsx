@@ -536,7 +536,8 @@ function App() {
       refreshTimer.current = setTimeout(() => {
         refreshTimer.current = null;
         void refresh();
-      }, 80);
+        // 只合并 UI 刷新，不延迟原生事件、截图或模型任务。
+      }, 250);
     });
     return () => {
       unsubscribe();
