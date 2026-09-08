@@ -70,6 +70,7 @@ declare global {
     proactive: {
       invoke: (method: string, p?: unknown) => Promise<any>;
       subscribe: (listener: () => void) => () => void;
+      onWindowBlur: (listener: () => void) => () => void;
     };
   }
 }
@@ -432,6 +433,12 @@ function App() {
   const [captureApps, setCaptureApps] = useState<any[]>([]);
   const [manualPid, setManualPid] = useState("");
   const [selected, setSelected] = useState<StreamRow | null>(null);
+  useEffect(() => {
+    // 切换到桌面或其他应用时收起详情，不改变采集与 Agent 的运行状态。
+    const dismiss = () => setSelected(null);
+    // 使用原生窗口失焦，不把组件内焦点移动误当作离开应用。
+    return api.onWindowBlur(dismiss);
+  }, []);
   const [observation, setObservation] = useState<any>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -872,8 +879,6 @@ function App() {
                 ? "w-[75vw] gap-0 sm:max-w-none"
                 : "w-full gap-0 sm:max-w-xl"
             }
-            // 详情保持展开，背景行可以继续切换；Esc 与关闭按钮仍沿用 Radix 行为。
-            onInteractOutside={(event) => event.preventDefault()}
           >
             <SheetHeader>
               <SheetTitle>{currentRow?.label ?? "事件详情"}</SheetTitle>
@@ -1182,6 +1187,43 @@ function App() {
                 </TabsContent>
               ))}
             </Tabs>
+            <Separator />
+            <div className="flex flex-col gap-2">
+              <p className="text-sm text-muted-foreground">
+                桌面弹幕 · 当前启动会话生效，最多同时一条；关闭后 Agent
+                仍可在时间线回复。
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  aria-pressed={state.danmakuEnabled !== false}
+                  disabled={!!busy}
+                  onClick={() =>
+                    act("danmaku.enabled", {
+                      enabled: state.danmakuEnabled === false,
+                    })
+                  }
+                >
+                  {state.danmakuEnabled === false
+                    ? "启用桌面弹幕"
+                    : "关闭桌面弹幕"}
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={!!busy || state.danmakuEnabled === false}
+                  onClick={() => act("danmaku.preview")}
+                >
+                  测试桌面弹幕
+                </Button>
+                <Button
+                  variant="ghost"
+                  disabled={!!busy}
+                  onClick={() => act("danmaku.clear")}
+                >
+                  清除弹幕
+                </Button>
+              </div>
+            </div>
             <Separator />
             <FieldGroup className="gap-3">
               <FieldLabel>哪些操作交给 Agent</FieldLabel>

@@ -2,8 +2,10 @@ import type { Context } from "@deepseek-ai/cordis";
 import type { ToolDefinition } from "@deepseek-ai/dsh-tools";
 import { realpath, readFile, stat } from "node:fs/promises";
 import { resolve, relative, isAbsolute } from "node:path";
+import { parseDanmaku, type DanmakuInput } from "./danmaku.ts";
 export interface RuntimeCapabilities {
   readObservation?: (actionId: string) => Promise<unknown>;
+  sendDanmaku?: (input: DanmakuInput) => Promise<unknown>;
   allowedReadRoot?: string;
 }
 // 以真实路径检查阻断 ../ 与符号链接逃逸；只读用户明确选定的小文件。
@@ -65,6 +67,23 @@ export function registerCapabilities(
       if (!capabilities.readObservation)
         throw new Error("observation_store_unavailable");
       return capabilities.readObservation((args as any).action_id);
+    },
+  );
+  tool(
+    "send_danmaku",
+    "在用户桌面显示一条从右向左飘过的短提醒，不抢焦点。仅在确有价值时调用，不要复述每个操作；限频或禁用时不要立即重试。只有返回 shown 才代表已展示。",
+    {
+      text: { type: "string", minLength: 1, maxLength: 80 },
+      duration_seconds: { type: "number", minimum: 4, maximum: 12 },
+    },
+    ["text"],
+    async (args) => {
+      const input = parseDanmaku(args);
+      if (!capabilities.sendDanmaku)
+        return { status: "unavailable", reason: "desktop_not_connected" };
+      const result = await capabilities.sendDanmaku(input);
+      emit({ kind: "danmaku.result", result });
+      return result;
     },
   );
   tool(

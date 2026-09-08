@@ -7,4 +7,9 @@ contextBridge.exposeInMainWorld("proactive", {
     ipcRenderer.on("proactive:event", fn);
     return () => ipcRenderer.removeListener("proactive:event", fn);
   },
+  onWindowBlur: (listener: () => void) => {
+    const fn = () => listener();
+    ipcRenderer.on("proactive:window-blur", fn);
+    return () => ipcRenderer.removeListener("proactive:window-blur", fn);
+  },
 });

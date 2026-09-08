@@ -42,6 +42,7 @@ import {
   type UnderstandingInput,
 } from "../model/understanding.ts";
 import type { ModelConfig } from "../model/gemini.ts";
+import { DesktopDanmaku } from "./danmaku.ts";
 
 app.setName("Proactive Lab");
 app.setPath(
@@ -50,6 +51,7 @@ app.setPath(
     join(app.getPath("appData"), "Proactive Lab"),
 );
 let window: BrowserWindow | undefined;
+let danmaku: DesktopDanmaku | undefined;
 let store: EvidenceStore;
 let collector: NativeCollectorHost;
 let axRecorder: AXRecorder | undefined;
@@ -149,6 +151,7 @@ function snapshot() {
     queue: queue.list(),
     allowedReadRoot,
     autoUnderstand,
+    danmakuEnabled: danmaku?.enabled ?? true,
     dataDir: app.getPath("userData"),
   };
 }
@@ -225,6 +228,8 @@ async function startRuntime(fixture: boolean) {
     modelConfig: fixture ? undefined : config,
     subagentConfig: fixture ? undefined : modelRoles.get("subagent"),
     allowedReadRoot,
+    sendDanmaku: async (input) =>
+      danmaku?.show(input) ?? { status: "unavailable" },
     readObservation: async (id) => {
       const item = await readObservation(id);
       return {
@@ -257,6 +262,7 @@ async function startRuntime(fixture: boolean) {
 async function closeAll() {
   if (shuttingDown) return;
   shuttingDown = true;
+  danmaku?.close();
   runtimeReady = false;
   understanding?.abort();
   try {
@@ -479,6 +485,22 @@ async function bootstrap() {
     "proactive:invoke",
     async (_event, method: string, p: any = {}) => {
       switch (method) {
+        case "danmaku.preview": {
+          const result = await danmaku?.show({
+            text: "你好，我是 Proactive Agent。这是一条桌面弹幕测试。",
+          });
+          if (result?.status !== "shown")
+            throw new Error(`danmaku_${result?.status ?? "unavailable"}`);
+          return result;
+        }
+        case "danmaku.enabled":
+          if (typeof p.enabled !== "boolean")
+            throw new Error("invalid_enabled");
+          danmaku?.setEnabled(p.enabled);
+          return snapshot();
+        case "danmaku.clear":
+          danmaku?.clear();
+          return { status: "cleared" };
         case "snapshot":
           return snapshot();
         case "routing.update":
@@ -720,6 +742,7 @@ async function bootstrap() {
       }
     },
   );
+  danmaku = new DesktopDanmaku();
   window = new BrowserWindow({
     // 自动验收可隐藏测试窗口，默认启动仍正常显示。
     show: process.env.PROACTIVE_QA_HIDDEN !== "1",
@@ -737,6 +760,15 @@ async function bootstrap() {
     },
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.on("blur", () => {
+    if (!window?.webContents.isDestroyed())
+      window?.webContents.send("proactive:window-blur");
+  });
+  // 隐藏的弹幕窗口不能阻止关闭主窗口后正常退出。
+  window.on("closed", () => {
+    danmaku?.close();
+    app.quit();
+  });
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   // 从系统设置返回后重新读取采集器权限，合并重复聚焦事件。
   let checkingPermissions = false;

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'"
+    />
+    <title>Proactive Agent 桌面弹幕</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: transparent;
+        pointer-events: none;
+      }
+      .danmaku {
+        position: absolute;
+        top: 12%;
+        left: 0;
+        white-space: nowrap;
+        font:
+          600 26px/1.5 -apple-system,
+          sans-serif;
+        color: white;
+        background: rgba(24, 27, 32, 0.84);
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        border-radius: 16px;
+        padding: 10px 22px;
+        box-shadow: 0 4px 20px #0004;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .danmaku {
+          max-width: calc(100vw - 80px);
+          white-space: normal;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <script src="danmaku.js"></script>
+  </body>
+</html>

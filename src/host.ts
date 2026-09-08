@@ -2,6 +2,7 @@ import { fork, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { resolve } from "node:path";
 import type { ModelConfig } from "./model/gemini.ts";
+import { parseDanmaku, type DanmakuInput } from "./model/danmaku.ts";
 // 宿主拥有 sidecar 生命周期；丢失 IPC 时子进程自行停止所有 DSH 活动。
 export class RuntimeHost extends EventEmitter {
   readonly child: ChildProcess;
@@ -28,6 +29,7 @@ export class RuntimeHost extends EventEmitter {
       subagentConfig,
       allowedReadRoot,
       readObservation,
+      sendDanmaku,
     }: {
       resume?: boolean;
       delayMs?: number;
@@ -38,6 +40,7 @@ export class RuntimeHost extends EventEmitter {
       subagentConfig?: ModelConfig;
       allowedReadRoot?: string;
       readObservation?: (id: string) => Promise<unknown>;
+      sendDanmaku?: (input: DanmakuInput) => Promise<unknown>;
     } = {},
   ) {
     super();
@@ -59,17 +62,33 @@ export class RuntimeHost extends EventEmitter {
     this.child.on("message", async (raw: any) => {
       if (!raw.toolRequest) return;
       try {
-        const result = readObservation
-          ? await readObservation(raw.toolRequest.actionId)
-          : { status: "unavailable" };
-        this.child.send({ toolResponse: { id: raw.toolRequest.id, result } });
+        const request = raw.toolRequest;
+        let result: unknown;
+        if (request.kind === "send_danmaku")
+          result = sendDanmaku
+            ? await sendDanmaku(parseDanmaku(request.input))
+            : { status: "unavailable" };
+        else if (!request.kind || request.kind === "read_observation")
+          result = readObservation
+            ? await readObservation(request.actionId)
+            : { status: "unavailable" };
+        else throw new Error("capability_not_allowed");
+        if (this.child.connected)
+          this.child.send(
+            { toolResponse: { id: request.id, result } },
+            () => {},
+          );
       } catch {
-        this.child.send({
-          toolResponse: {
-            id: raw.toolRequest.id,
-            error: "observation_read_failed",
-          },
-        });
+        if (this.child.connected)
+          this.child.send(
+            {
+              toolResponse: {
+                id: raw.toolRequest.id,
+                error: "capability_failed",
+              },
+            },
+            () => {},
+          );
       }
     });
     this.child.stderr?.on("data", (data) =>

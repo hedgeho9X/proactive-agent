@@ -5,8 +5,24 @@ const root = process.argv[2];
 if (!root) throw new Error("runtime_root_required");
 const toolPending = new Map<
   string,
-  { resolve: (value: unknown) => void; reject: (error: Error) => void }
+  {
+    resolve: (value: unknown) => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }
 >();
+function requestCapability(request: Record<string, unknown>) {
+  return new Promise<unknown>((resolve, reject) => {
+    const id = crypto.randomUUID();
+    const timer = setTimeout(() => {
+      toolPending.delete(id);
+      reject(new Error("capability_timeout"));
+    }, 5000);
+    timer.unref();
+    toolPending.set(id, { resolve, reject, timer });
+    process.send?.({ toolRequest: { ...request, id } });
+  });
+}
 let runtime: ProactiveRuntime;
 const ready = new Promise<unknown>((resolve, reject) => {
   process.once("message", async (raw: any) => {
@@ -22,15 +38,9 @@ const ready = new Promise<unknown>((resolve, reject) => {
       {
         allowedReadRoot,
         readObservation: (actionId) =>
-          new Promise((resolve, reject) => {
-            const id = crypto.randomUUID();
-            toolPending.set(id, { resolve, reject });
-            process.send?.({ toolRequest: { id, actionId } });
-            setTimeout(() => {
-              if (toolPending.delete(id))
-                reject(new Error("observation_read_timeout"));
-            }, 5000).unref();
-          }),
+          requestCapability({ kind: "read_observation", actionId }),
+        sendDanmaku: (input) =>
+          requestCapability({ kind: "send_danmaku", input }),
       },
     );
     try {
@@ -59,10 +69,12 @@ process.on("message", async (raw: any) => {
   if (raw.toolResponse) {
     const p = toolPending.get(raw.toolResponse.id);
     toolPending.delete(raw.toolResponse.id);
-    if (p)
+    if (p) {
+      clearTimeout(p.timer);
       raw.toolResponse.error
         ? p.reject(new Error(raw.toolResponse.error))
         : p.resolve(raw.toolResponse.result);
+    }
     return;
   }
   const message = raw as { id: number; method: string; params?: any };
@@ -101,5 +113,10 @@ process.on("message", async (raw: any) => {
   }
 });
 process.on("disconnect", () => {
+  for (const p of toolPending.values()) {
+    clearTimeout(p.timer);
+    p.reject(new Error("desktop_disconnected"));
+  }
+  toolPending.clear();
   void runtime?.close();
 });

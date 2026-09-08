@@ -9,6 +9,23 @@ if (process.platform === "darwin")
 await mkdir("dist/renderer", { recursive: true });
 await Promise.all([
   build({
+    entryPoints: ["src/desktop/danmaku-preload.ts"],
+    outfile: "dist/desktop/danmaku-preload.cjs",
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    external: ["electron"],
+    target: "node24",
+  }),
+  build({
+    entryPoints: ["src/renderer/danmaku.ts"],
+    outfile: "dist/renderer/danmaku.js",
+    bundle: true,
+    platform: "browser",
+    format: "iife",
+    target: "chrome140",
+  }),
+  build({
     entryPoints: ["src/sidecar.ts"],
     outfile: "dist/sidecar.mjs",
     bundle: true,
@@ -60,6 +77,7 @@ execFileSync(
   { stdio: "inherit" },
 );
 await copyFile("src/renderer/index.html", "dist/renderer/index.html");
+await copyFile("src/renderer/danmaku.html", "dist/renderer/danmaku.html");
 
 if (existsSync("native/collector/.build/debug/ProactiveCollector")) {
   await mkdir("dist/native", { recursive: true });
