@@ -2,11 +2,11 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AXHistory } from "./ax-history.ts";
 
-// 原始输入事件先独立落盘；重采集仅一个在途，忙时不积压过时截图请求。
+// 原始输入独立落盘；在途数量有界，满额时记录原因，不积压过时截图请求。
 export class AXRecorder {
   private child?: ChildProcessWithoutNullStreams;
   private jobs = new Set<Promise<void>>();
-  private captureBusy = false;
+  private capturing = 0;
   private scope: { allApps: boolean; allowedBundleIds: string[] } = {
     allApps: true,
     allowedBundleIds: [],
@@ -18,9 +18,15 @@ export class AXRecorder {
     private inspect: (event: any) => Promise<any>,
     private changed: () => void,
     private completed?: (snapshot: any) => Promise<void>,
+    private maxConcurrent = 1,
   ) {}
   status() {
-    return { ...this.current, pending: this.jobs.size };
+    return {
+      ...this.current,
+      pending: this.jobs.size,
+      capturing: this.capturing,
+      maxConcurrent: this.maxConcurrent,
+    };
   }
   async accept(event: any) {
     if (
@@ -36,14 +42,15 @@ export class AXRecorder {
     const captures = ["click", "key_down"].includes(event.kind);
     // 防御旧监听协议，松开及修饰键不再生成空快照记录。
     if (!captures) return;
-    const captureStatus = this.captureBusy ? "skipped_busy" : "pending";
-    if (captureStatus === "pending") this.captureBusy = true;
+    const captureStatus =
+      this.capturing >= this.maxConcurrent ? "skipped_busy" : "pending";
+    if (captureStatus === "pending") this.capturing++;
     // 截图请求与事件落盘同时启动，避免磁盘延迟推迟取证。
     const inspection =
       captureStatus === "pending"
         ? this.inspect(event).then(
             (result) => ({ result, error: false }),
-            () => ({ result: null, error: true }),
+            (error) => ({ result: null, error }),
           )
         : null;
     try {
@@ -58,6 +65,13 @@ export class AXRecorder {
           captureStatus,
           partial: true,
           screenshot: { status: "unavailable", reason: captureStatus },
+          captureDiagnostics: {
+            stage: "capture_admission",
+            reason: captureStatus,
+            inFlight: this.capturing,
+            limit: this.maxConcurrent,
+            target: event.targetWindow ?? null,
+          },
         },
         event.id,
       );
@@ -66,15 +80,25 @@ export class AXRecorder {
       if (captureStatus !== "pending") return;
       try {
         const outcome = await inspection!;
-        if (outcome.error) throw new Error("inspection_failed");
+        if (outcome.error) throw outcome.error;
         const result = outcome.result;
-        const failed = !!result.error;
+        const failed =
+          !!result.error ||
+          result.screenshot?.status !== "captured" ||
+          !result.screenshot?.data;
+        const reason =
+          result.error ?? result.screenshot?.reason ?? "screenshot_required";
         const saved = await this.history.update(event.id, {
           ...result,
           nodes: result.nodes ?? [],
           trigger: event,
           captureStatus: failed ? "failed" : "captured",
-          captureError: failed ? result.error : undefined,
+          captureError: failed ? reason : undefined,
+          screenshot: result.screenshot ?? {
+            status: "error",
+            reason,
+            stage: result.captureDiagnostics?.stage ?? "inspector_result",
+          },
         });
         if (!failed && this.completed) {
           // Agent 路由失败不能把成功截图改成采集失败，也不能停止输入监听。
@@ -86,19 +110,31 @@ export class AXRecorder {
             });
           }
         }
-      } catch {
+      } catch (error) {
+        const reason =
+          error instanceof Error &&
+          /^(inspection_|inspector_)/.test(error.message)
+            ? error.message
+            : "inspection_failed";
+        const diagnostics = (error as any)?.captureDiagnostics ?? {
+          stage: "inspector_ipc",
+          reason,
+          target: event.targetWindow ?? null,
+        };
         await this.history.update(event.id, {
           captureStatus: "failed",
-          captureError: "inspection_failed_or_timeout",
+          captureError: reason,
+          captureDiagnostics: diagnostics,
           screenshot: {
             status: "unavailable",
-            reason: "inspection_failed_or_timeout",
+            reason,
+            stage: diagnostics.stage,
           },
         });
       }
       this.changed();
     } finally {
-      if (captureStatus === "pending") this.captureBusy = false;
+      if (captureStatus === "pending") this.capturing--;
     }
   }
   async start(scope?: { allApps: boolean; allowedBundleIds: string[] }) {

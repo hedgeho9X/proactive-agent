@@ -38,7 +38,7 @@ export function snapshotRoutingReason(snapshot: any, selected: string[]) {
     snapshot.nodes?.some((node: any) => node.protected)
   )
     return "protected_evidence";
-  if (!snapshot.screenshot?.data && !snapshot.nodes?.length)
-    return "evidence_unavailable";
+  if (snapshot.screenshot?.status !== "captured" || !snapshot.screenshot?.data)
+    return snapshot.screenshot?.reason ?? "screenshot_required";
   return undefined;
 }

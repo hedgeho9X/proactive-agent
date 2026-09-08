@@ -57,3 +57,29 @@ test.skipIf(process.platform !== "darwin")(
     }
   },
 );
+
+test("进度消息不会提前结束采集，超时携带仍在执行的具体阶段", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "inspector-progress-"));
+  const binary = join(dir, "mock.mjs");
+  await writeFile(
+    binary,
+    '#!/usr/bin/env node\nimport{createInterface}from"node:readline";console.log(JSON.stringify({type:"inspector_ready"}));createInterface({input:process.stdin}).on("line",line=>{const r=JSON.parse(line);for(const progress of [{component:"screenshot",stage:"screenshot_capture",state:"running"},{component:"ax",stage:"ax_traversal",state:"complete"}])console.log(JSON.stringify({type:"inspection_progress",requestId:r.requestId,progress}));});',
+  );
+  await chmod(binary, 0o755);
+  const client = new AXInspectorClient(binary, 100);
+  try {
+    const error = await client
+      .inspect({ targetWindow: { id: 123 } })
+      .catch((error) => error);
+    expect(error.message).toBe("inspection_timeout");
+    expect(error.captureDiagnostics).toMatchObject({
+      stage: "screenshot_capture",
+      timeoutMs: 100,
+      target: { id: 123 },
+      lastKnownStages: { ax: { state: "complete" } },
+    });
+  } finally {
+    await client.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

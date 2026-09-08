@@ -126,6 +126,8 @@ export class UnderstandingService {
     config: ModelConfig,
     prompt = defaultPrompts.understanding,
   ) {
+    if (!input.artifacts.screenshot?.bytes)
+      throw new Error("screenshot_required");
     input = projectUnderstanding(input);
     const { manifest, hash } = inputManifest(
       input,

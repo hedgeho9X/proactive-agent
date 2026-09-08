@@ -582,15 +582,16 @@ function App() {
   });
   const axRows = projectAXRecords(axRecords).map((row) => {
     const item = queue.get(row.id);
+    const hasImage =
+      row.detail.axRecord.hasScreenshot ?? !!item?.inputImageFile;
+    const actionTitle = hasImage ? item?.actionTitle : undefined;
     return {
       ...row,
       status: item?.status ?? row.status,
-      text: item?.actionTitle
-        ? `${item.actionTitle} · ${item.actionDetail}`
-        : row.text,
+      text: actionTitle ? `${actionTitle} · ${item.actionDetail}` : row.text,
       detail: {
         ...row.detail,
-        actionTitle: item?.actionTitle,
+        actionTitle,
         actionDetail: item?.actionDetail,
       },
     };

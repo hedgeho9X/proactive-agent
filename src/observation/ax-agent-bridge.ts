@@ -52,7 +52,11 @@ export function axObservation(snapshot: any) {
         bundle_id: snapshot.bundleId,
         name: snapshot.app,
       },
-      window: { id: snapshot.windowId },
+      window: {
+        id: snapshot.windowId,
+        target: event.targetWindow,
+        captureDiagnostics: snapshot.captureDiagnostics,
+      },
       input: {
         key_name: event.key,
         key_category: "special",
@@ -120,6 +124,7 @@ export function axObservation(snapshot: any) {
               coverage: {
                 partial: !!snapshot.partial,
                 timing: snapshot.timing,
+                diagnostics: snapshot.captureDiagnostics,
               },
               regions: snapshot.screenshot?.regions,
             })

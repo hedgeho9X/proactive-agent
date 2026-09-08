@@ -32,9 +32,19 @@ test("默认Enter、空格和点击进入理解，保护或错位证据不可发
     captureStatus: "captured",
     trigger: { kind: "key_down", key: "Enter" },
     nodes: [],
-    screenshot: { data: "fixture" },
+    screenshot: { status: "captured", data: "fixture" },
   };
   expect(snapshotRoutingReason(snapshot, defaultRouting)).toBeUndefined();
+  expect(
+    snapshotRoutingReason(
+      {
+        ...snapshot,
+        nodes: [{ attributes: {} }],
+        screenshot: { status: "unavailable" },
+      },
+      defaultRouting,
+    ),
+  ).toBe("screenshot_required");
   expect(
     snapshotRoutingReason(
       { ...snapshot, alignment: { sameWindow: false } },

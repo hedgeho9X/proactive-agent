@@ -51,6 +51,10 @@ export class AXHistory {
       partial: !!snapshot.partial,
       trigger: snapshot.trigger,
       captureStatus: snapshot.captureStatus,
+      hasScreenshot:
+        snapshot.screenshot?.status === "captured" &&
+        !!snapshot.screenshot?.data,
+      screenshotReason: snapshot.captureError ?? snapshot.screenshot?.reason,
       file: join(target, "snapshot.json"),
     };
     await mkdir(pending, { mode: 0o700 });
@@ -78,6 +82,9 @@ export class AXHistory {
       partial: !!value.partial,
       trigger: value.trigger,
       captureStatus: value.captureStatus,
+      hasScreenshot:
+        value.screenshot?.status === "captured" && !!value.screenshot?.data,
+      screenshotReason: value.captureError ?? value.screenshot?.reason,
       file: join(path, "snapshot.json"),
     };
     // 更新只针对仍存在的快照目录，不重新创建用户已删除的记录。

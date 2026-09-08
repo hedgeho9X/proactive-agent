@@ -29,6 +29,8 @@ API Key 仅保留在本次进程内存；本应用不读取旧应用配置。文
 
 设置中可编辑三角色中文 Prompt，理解并发默认 10。主 Agent 按批次接收带时间和 Action ID 的摘要，可按 ID 取 AX/OCR/标注图，并通过弹幕提出建议。默认新触发配置包含 Enter、空格与点击，已有自定义配置不会覆盖。完整行为和验证边界见 [当前动作理解](docs/ACTION-UNDERSTANDING.md)。
 
+采集现在按事件锁定窗口 ID，不再要求 AX 尺寸唯一匹配；前台状态在主线程读取，之后切换应用不会改拍新前台。只有真正取得图片才算成功并允许 AI 理解，无图或系统错误会在侧栏显示具体原因、阶段和目标窗口。详见 [窗口截图规则与验证](docs/WINDOW-CAPTURE.md)。旧失败记录无法补造当时图片，需要重启后重新操作采集。
+
 - [需求](docs/PRD.md)
 - [实施进度](docs/IMPLEMENTATION-STATUS.md)
 - [S0 验证](docs/S0-RUNTIME-VERIFICATION.md)

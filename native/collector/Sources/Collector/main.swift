@@ -156,7 +156,11 @@ if CommandLine.arguments.contains("--inspect-stream") {
     DispatchQueue.global().async {
         while let line = readLine() {
             guard let data = line.data(using:.utf8), let message = try? JSONSerialization.jsonObject(with:data) as? [String:Any], let event = message["event"] as? [String:Any], let pid = event["pid"] as? Int32, let requestId = message["requestId"] as? String else { continue }
-            Task { let result = await inspectAX(pid,trigger:event); emit(["type":"inspection","requestId":requestId,"result":result]) }
+            Task {
+                let result = await inspectAX(pid,trigger:event,progress:{ value in emit(["type":"inspection_progress","progressFor":requestId,"progress":value]) })
+                emit(["type":"inspection_progress","progressFor":requestId,"progress":["component":"response","stage":"result_serialization","state":"running"]])
+                emit(["type":"inspection","requestId":requestId,"result":result])
+            }
         }
         exit(0)
     }

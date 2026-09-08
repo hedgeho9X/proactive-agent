@@ -27,14 +27,35 @@ final class InputWatch {
         let receivedAt = Date()
         var target = NSWorkspace.shared.frontmostApplication
         var targetBasis = "frontmost_at_event"
+        let lookupAt = Date()
+        let windows = onscreenCaptureWindows()
+        var lockedWindow: CaptureWindowTarget?
+        var targetError: String?
+        var hitTestPid: pid_t?
+        let nativePid = event.getIntegerValueField(.eventTargetUnixProcessID)
         if type != .keyDown {
-            // 鼠标按下时前台可能尚未切换，优先定位光标命中的进程。
-            let system = AXUIElementCreateSystemWide();AXUIElementSetMessagingTimeout(system,0.005)
-            var hit:AXUIElement?
-            if AXUIElementCopyElementAtPosition(system,Float(event.location.x),Float(event.location.y),&hit) == .success, let hit {
-                var pid:pid_t = 0
-                if AXUIElementGetPid(hit,&pid) == .success { target = NSRunningApplication(processIdentifier:pid);targetBasis = "hit_test_at_mouse_down" }
-            } else { targetBasis = "frontmost_hit_test_unavailable" }
+            // 此事件阶段的 target PID 可能仍是旧前台，只作诊断，不过滤真实点击目标。
+            lockedWindow = windows.flatMap { clickedWindow($0,point:event.location) }
+            if let window = lockedWindow {
+                if let owner = NSRunningApplication(processIdentifier:window.pid) { target = owner; targetBasis = window.source }
+                else { lockedWindow = nil; targetError = "clicked_window_owner_unavailable" }
+                // 有可读 AX 时交叉核对，透明/点击穿透窗口冲突时明确报错，不猜测。
+                let system = AXUIElementCreateSystemWide(); AXUIElementSetMessagingTimeout(system,0.005)
+                var hit: AXUIElement?
+                if AXUIElementCopyElementAtPosition(system,Float(event.location.x),Float(event.location.y),&hit) == .success, let hit {
+                    var actual: pid_t = 0
+                    if AXUIElementGetPid(hit,&actual) == .success { hitTestPid = actual }
+                    if actual > 0 && actual != window.pid && actual != getppid() { targetError = "click_window_owner_ambiguous" }
+                }
+            }
+            else { targetError = windows == nil ? "window_server_unavailable":"no_window_at_click" }
+        } else if let app = target {
+            let application = AXUIElementCreateApplication(app.processIdentifier); AXUIElementSetMessagingTimeout(application,0.005)
+            let focused = attribute(application,kAXFocusedWindowAttribute)
+            let frame = focused.flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? bounds($0 as! AXUIElement) : nil }
+            lockedWindow = windows.flatMap { keyboardWindow($0,pid:app.processIdentifier,focusedBounds:frame) }
+            if let window = lockedWindow { targetBasis = window.source }
+            else { targetError = windows == nil ? "window_server_unavailable":"keyboard_window_not_found" }
         }
         guard let app = target, app.processIdentifier != getppid(), app.processIdentifier != getpid(), app.bundleIdentifier != "io.github.hedgeho9x.proactive-agent" else { return }
         let keyNames: [Int64:String] = [0:"A",1:"S",2:"D",3:"F",4:"H",5:"G",6:"Z",7:"X",8:"C",9:"V",11:"B",12:"Q",13:"W",14:"E",15:"R",16:"Y",17:"T",18:"1",19:"2",20:"3",21:"4",22:"6",23:"5",24:"=",25:"9",26:"7",27:"-",28:"8",29:"0",30:"]",31:"O",32:"U",33:"[",34:"I",35:"P",36:"Enter",37:"L",38:"J",39:"Quote",40:"K",41:";",42:"Backslash",43:",",44:"/",45:"N",46:"M",47:".",48:"Tab",49:"Space",50:"Backquote",51:"Backspace",53:"Escape",55:"Command",56:"Shift",57:"CapsLock",58:"Option",59:"Control",60:"RightShift",61:"RightOption",62:"RightControl",63:"Fn",76:"NumpadEnter",82:"Numpad0",83:"Numpad1",84:"Numpad2",85:"Numpad3",86:"Numpad4",87:"Numpad5",88:"Numpad6",89:"Numpad7",91:"Numpad8",92:"Numpad9",96:"F5",97:"F6",98:"F7",99:"F3",100:"F8",101:"F9",103:"F11",109:"F10",111:"F12",115:"Home",116:"PageUp",117:"Delete",118:"F4",119:"End",120:"F2",121:"PageDown",122:"F1",123:"Left",124:"Right",125:"Down",126:"Up"]
@@ -47,6 +68,10 @@ final class InputWatch {
         var value: [String:Any] = ["id":"ax-" + UUID().uuidString.lowercased(),"session":session,"sequence":sequence,"occurredAt":formatter.string(from:receivedAt),"monotonicNs":String(event.timestamp),"pid":Int(app.processIdentifier),"app":app.localizedName ?? "","bundleId":app.bundleIdentifier ?? "","appLaunchedAt":app.launchDate.map { formatter.string(from:$0) } ?? "","kind":type == .keyDown ? "key_down" : "click","phase":"down","modifiers":modifiers,"targetBasis":targetBasis]
         if keyboard { value["keyCode"] = code; value["key"] = keyNames[code] ?? "Key\(code)"; value["repeat"] = event.getIntegerValueField(.keyboardEventAutorepeat) != 0 }
         else { value["button"] = event.getIntegerValueField(.mouseEventButtonNumber); value["x"] = event.location.x; value["y"] = event.location.y; value["clickCount"] = event.getIntegerValueField(.mouseEventClickState) }
+        value["targetWindow"] = lockedWindow?.json as Any? ?? NSNull()
+        value["nativeEventWindowId"] = NSEvent(cgEvent:event)?.windowNumber ?? 0
+        value["nativeEventTargetPid"] = nativePid
+        value["targetResolution"] = ["status":lockedWindow == nil || targetError != nil ? "failed":"resolved","reason":targetError as Any? ?? NSNull(),"stage":"event_window_lookup","hitTestPid":hitTestPid.map {Int($0)} as Any? ?? NSNull(),"lookupAt":preciseTimestamp(lookupAt),"elapsedMs":Int(Date().timeIntervalSince(lookupAt)*1000)]
         emit(["type":"input_event","event":value])
     }
 }

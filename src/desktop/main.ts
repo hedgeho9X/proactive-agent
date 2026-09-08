@@ -47,6 +47,7 @@ import { PromptStore, type PromptRole } from "../model/prompts.ts";
 import { prepareEvidence } from "../observation/prepare-evidence.ts";
 import { trajectoryLine } from "../model/trajectory.ts";
 import { createHash } from "node:crypto";
+import { captureDiagnostic } from "../observation/capture-diagnostics.ts";
 
 app.setName("Proactive Lab");
 app.setPath(
@@ -444,7 +445,16 @@ async function bootstrap() {
           event.appLaunchedAt &&
           result.appLaunchedAt !== event.appLaunchedAt
         )
-          return { error: "target_process_replaced" };
+          return {
+            error: "target_process_replaced",
+            captureDiagnostics: {
+              stage: "application_identity",
+              reason: "target_process_replaced",
+              target: event.targetWindow,
+              expectedLaunch: event.appLaunchedAt,
+              actualLaunch: result.appLaunchedAt,
+            },
+          };
         return result;
       },
       () => notify(),
@@ -460,6 +470,7 @@ async function bootstrap() {
         await axHistory.update(id, { routing: { status: "queued" } });
         queue.enqueue(id);
       },
+      3,
     );
     store = new EvidenceStore(
       join(app.getPath("userData"), "observations.sqlite"),
@@ -752,9 +763,23 @@ async function bootstrap() {
           { timeout: 15000, maxBuffer: 24 * 1024 * 1024 },
         );
         const result = JSON.parse(stdout);
-        return method === "ax.inspect" && !result.error
-          ? axHistory.save(result)
-          : result;
+        if (method !== "ax.inspect") return result;
+        const saved = await axHistory.save({
+          ...result,
+          error: undefined,
+          nodes: result.nodes ?? [],
+          pid,
+          app: result.app ?? `应用 PID ${pid}`,
+          captureError: result.error,
+          captureStatus: result.error ? "failed" : "captured",
+        });
+        if (result.error) {
+          const failure = captureDiagnostic(result);
+          throw new Error(
+            `${failure.message} 阶段=${failure.stage}，原因=${failure.reason}，记录=${saved.snapshotId}`,
+          );
+        }
+        return saved;
       }
       case "ax.history":
         return axHistory.list();

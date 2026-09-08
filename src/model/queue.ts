@@ -51,7 +51,7 @@ export class ActionQueue {
     // 主列表只读取摘要，不把整份 Prompt/AX/响应反复传到渲染层。
     return this.db
       .prepare(
-        "SELECT seq,actionId,status,reason,attempts,createdAt,json_extract(result,'$.result.action_title') AS actionTitle,json_extract(result,'$.result.action_detail') AS actionDetail FROM queue ORDER BY seq",
+        "SELECT seq,actionId,status,reason,attempts,createdAt,json_extract(result,'$.result.action_title') AS actionTitle,json_extract(result,'$.result.action_detail') AS actionDetail,json_extract(result,'$.debug.imageFile') AS inputImageFile FROM queue ORDER BY seq",
       )
       .all();
   }

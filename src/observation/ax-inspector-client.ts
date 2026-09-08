@@ -5,17 +5,23 @@ import { createInterface } from "node:readline";
 export class AXInspectorClient {
   private child?: ChildProcessWithoutNullStreams;
   private ready?: Promise<void>;
+  private stopReason = "process_exited";
   private pending = new Map<
     string,
     {
       resolve: (value: any) => void;
       reject: (error: Error) => void;
       timer: ReturnType<typeof setTimeout>;
+      stages: Record<string, any>;
     }
   >();
-  constructor(private binary: string) {}
+  constructor(
+    private binary: string,
+    private timeoutMs = 15000,
+  ) {}
   start(): Promise<void> {
     if (this.ready) return this.ready;
+    this.stopReason = "process_exited";
     const child = spawn(this.binary, ["--inspect-stream"], {
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -36,6 +42,14 @@ export class AXInspectorClient {
             resolve();
             return;
           }
+          if (message.type === "inspection_progress") {
+            const pending = this.pending.get(
+              message.progressFor ?? message.requestId,
+            );
+            if (pending && typeof message.progress?.component === "string")
+              pending.stages[message.progress.component] = message.progress;
+            return;
+          }
           const pending = this.pending.get(message.requestId);
           if (pending) {
             clearTimeout(pending.timer);
@@ -43,6 +57,7 @@ export class AXInspectorClient {
             pending.resolve(message.result);
           }
         } catch {
+          this.stopReason = "invalid_inspector_protocol";
           child.kill("SIGTERM");
         }
       });
@@ -57,7 +72,16 @@ export class AXInspectorClient {
         reject(new Error("inspector_exited"));
         for (const item of this.pending.values()) {
           clearTimeout(item.timer);
-          item.reject(new Error("inspector_exited"));
+          item.reject(
+            Object.assign(new Error("inspector_exited"), {
+              captureDiagnostics: {
+                stage: "inspector_ipc",
+                reason: "inspector_exited",
+                processReason: this.stopReason,
+                lastKnownStages: item.stages,
+              },
+            }),
+          );
         }
         this.pending.clear();
       });
@@ -69,11 +93,26 @@ export class AXInspectorClient {
     const requestId = crypto.randomUUID();
     return new Promise<any>((resolve, reject) => {
       const timer = setTimeout(() => {
+        const stages = this.pending.get(requestId)?.stages ?? {};
         this.pending.delete(requestId);
-        reject(new Error("inspection_timeout"));
+        const active = Object.values(stages).find(
+          (item: any) => item.state === "running",
+        ) as any;
+        reject(
+          Object.assign(new Error("inspection_timeout"), {
+            captureDiagnostics: {
+              stage: active?.stage ?? "inspector_ipc",
+              reason: "inspection_timeout",
+              timeoutMs: this.timeoutMs,
+              target: event.targetWindow ?? null,
+              lastKnownStages: stages,
+            },
+          }),
+        );
+        this.stopReason = `inspection_timeout:${requestId}`;
         this.child?.kill("SIGTERM");
-      }, 15000);
-      this.pending.set(requestId, { resolve, reject, timer });
+      }, this.timeoutMs);
+      this.pending.set(requestId, { resolve, reject, timer, stages: {} });
       this.child!.stdin.write(
         JSON.stringify({ requestId, event }) + "\n",
         (error) => {

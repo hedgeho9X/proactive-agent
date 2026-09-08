@@ -4,6 +4,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { FocusOverlay } from "./focus-overlay.tsx";
 import { attributeText } from "./ax-attributes.ts";
 import { AITrace } from "./ai-trace.tsx";
+import { CaptureStatus } from "./capture-status.tsx";
 
 // 本地证据复用主页面的详情抽屉，不再拥有独立页面、导航或采集循环。
 export function AXRecordDetails({
@@ -115,6 +116,7 @@ export function AXRecordDetails({
       {!snapshot && !error && <p className="text-sm">加载证据…</p>}
       {snapshot && (
         <>
+          <CaptureStatus snapshot={snapshot} />
           <p className="text-xs">
             {snapshot.trigger?.kind ?? "手动快照"} ·{" "}
             {(snapshot.trigger?.modifiers ?? []).join("+")}{" "}
