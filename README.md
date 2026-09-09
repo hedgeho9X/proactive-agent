@@ -1,12 +1,14 @@
 # Proactive Lab
 
-独立 macOS 主动式 Agent 实验应用：原生动作与证据采集、React 调试工作台、DSH 主子代理，以及可配置的 Gemini 事实理解。默认采集关闭，无模型凭证时显示 unavailable；Fixture 演示不调用真实模型。
+独立 macOS 主动式 Agent 实验应用：原生动作与证据采集、React 调试工作台、DSH 主子代理，以及基于 Vercel AI SDK 的屏幕事实理解。默认采集关闭，无模型凭证时显示 unavailable；Fixture 演示不调用真实模型。
 
 使用 Bun 1.3.14+、macOS Swift 工具链。安装执行 `bun install --frozen-lockfile`；`bun run desktop` 编译并启动；`bun run package:mac` 生成独立 `.app`。桌面使用 Electron 自身的 Node 运行编译JS sidecar，不依赖用户机器上的系统 Node。
 
 `bun run typecheck`、`bun run format:check`、`bun run test` 验证代码。运行时测试包含真正20秒后台子任务。`bun run demo` 是无桌面采集、无真实模型的短命令行演示。
 
 列表与状态刷新只读取轻量摘要，完整 AX、Prompt 和图片仍可在详情中按需查看。性能瓶颈、实测数据和复测方式见 [性能验证](docs/PERFORMANCE.md)。
+
+屏幕理解使用 `ai` 的 `generateText + Output.object`，OpenAI-compatible 通过 `@ai-sdk/openai-compatible`，Gemini 原生协议通过 `@ai-sdk/google`。现有模型、Base URL、加密凭证及中文 Prompt 不变；主 Agent/Sub-agent 继续使用 DeepSeek Harness。详见 [屏幕理解 SDK 边界与验证](docs/UNDERSTANDING-SDK.md)。
 
 API Key 在本机通过 Electron safeStorage（macOS 系统钥匙串）加密保存，重启后恢复三个角色各自的凭证；不写入源码、Git、明文配置或界面快照。系统加密不可用时保存报错，不降级为明文。设置中的「清除 Key」同时删除对应角色的本地密文；清空历史保留配置和凭证。本应用不读取旧应用配置。文件工具只读取用户选定目录，所有外部业务写工具仅生成 not_executed 提案。`send_danmaku` 是真实执行的本地桌面展示工具，不修改业务数据。Web / 日程读取 provider 尚未配置。跨重启任务业务索引、正式签名、公证及完整PRD验收仍未完成。
 

@@ -1,6 +1,12 @@
-import { completion } from "./openai.ts";
-import type { RoleModelConfig } from "./config.ts";
-import { GoogleGenAI } from "@google/genai";
+/** 单次屏幕事实理解、证据缓存和追踪；不维护主 Agent 历史或执行工具。 */
+import {
+  generateText,
+  Output,
+  jsonSchema,
+  NoObjectGeneratedError,
+  APICallError,
+} from "ai";
+import { understandingModel } from "./understanding-provider.ts";
 import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -8,9 +14,10 @@ import {
   validateJsonSchemaValue,
   type ToolDefinition,
 } from "@deepseek-ai/dsh-tools";
-import { publicModelError, usageOf, type ModelConfig } from "./gemini.ts";
+import { usageOf, type ModelConfig } from "./gemini.ts";
 import { defaultPrompts } from "./prompts.ts";
 
+/** 单次动作及其关联证据；view 决定传入模型的 AX 视图。 */
 export interface UnderstandingInput {
   action: Record<string, unknown>;
   revision: number;
@@ -18,6 +25,7 @@ export interface UnderstandingInput {
   artifacts: Record<string, any>;
   view: "raw" | "context";
 }
+/** 供 provider 请求和本地校验共用的动作描述输出契约。 */
 export const understandingSchema: ToolDefinition["output"]["schema"] = {
   type: "object",
   properties: {
@@ -27,6 +35,7 @@ export const understandingSchema: ToolDefinition["output"]["schema"] = {
   required: ["action_title", "action_detail"],
   additionalProperties: false,
 };
+/** 对键顺序归一化，生成稳定的缓存哈希输入。 */
 export function canonical(value: unknown): string {
   if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
   if (value && typeof value === "object")
@@ -40,6 +49,7 @@ export function canonical(value: unknown): string {
     );
   return JSON.stringify(value) ?? "null";
 }
+/** 选择当前证据视图，不把未声明的前置截图发送给模型。 */
 export function projectUnderstanding(
   input: UnderstandingInput,
 ): UnderstandingInput {
@@ -67,10 +77,11 @@ export function projectUnderstanding(
       },
     };
   }
-  // Before截图保持manifest中的完整关联，但首版模型只发送After截图，避免未声明的双图含义。
+  // 模型只接收当前截图，防止将两帧误解为同一时刻。
   delete artifacts.screenshot_before;
   return { ...input, artifacts };
 }
+/** 构建包含模型、Prompt 和证据哈希的缓存清单，不保存凭证。 */
 export function inputManifest(
   input: UnderstandingInput,
   model: string,
@@ -93,7 +104,7 @@ export function inputManifest(
     ]),
   );
   const manifest = {
-    schema: "understanding-v2",
+    schema: "understanding-v3-ai-sdk",
     prompt_version: 3,
     prompt,
     model,
@@ -105,22 +116,26 @@ export function inputManifest(
     hash: createHash("sha256").update(canonical(manifest)).digest("hex"),
   };
 }
-// 缓存包含动作、证据状态、AX/OCR内容与图像hash，不能只用截图判断相同上下文。
+/** 管理独立理解请求及落盘追踪，相同上下文并发调用共享同一请求。 */
 export class UnderstandingService {
   private controller = new AbortController();
+  /** 取消本服务内所有在途请求。 */
   abort() {
     this.controller.abort();
   }
+  /** 取消请求并等待其退出，避免关闭后继续写缓存。 */
   async close() {
     this.abort();
     await Promise.allSettled([...this.active.values()]);
   }
   private active = new Map<string, Promise<unknown>>();
 
+  /** cacheDir 为本应用私有目录；emit 只发布轻量状态。 */
   constructor(
     private cacheDir: string,
     private emit: (event: Record<string, unknown>) => void,
   ) {}
+  /** 从缓存或 AI SDK 获取结构化描述，必须存在截图。 */
   async summarize(
     input: UnderstandingInput,
     config: ModelConfig,
@@ -154,6 +169,7 @@ export class UnderstandingService {
       this.active.delete(hash);
     }
   }
+  /** 发起一次无工具模型请求，并保存可按 Action ID 查询的输入与输出。 */
   private async run(
     input: UnderstandingInput,
     config: ModelConfig,
@@ -167,32 +183,26 @@ export class UnderstandingService {
         a ? { ...a, bytes: undefined } : null,
       ]),
     );
-    const parts: any[] = [
-      {
-        text: JSON.stringify({
-          任务: "请描述用户在这一时刻做了什么，输出 action_title 和 action_detail。",
-          动作提示: actionHint(input.action),
-          action: input.action,
-          evidence: input.evidence,
-          artifacts: safeArtifacts,
-          view: input.view,
-        }),
-      },
-    ];
+    const userPrompt = JSON.stringify({
+      任务: "请描述用户在这一时刻做了什么，输出 action_title 和 action_detail。",
+      动作提示: actionHint(input.action),
+      action: input.action,
+      evidence: input.evidence,
+      artifacts: safeArtifacts,
+      view: input.view,
+    });
     const screenshot = input.artifacts.screenshot;
-    if (screenshot?.bytes)
-      parts.push({
-        inlineData: { mimeType: "image/png", data: screenshot.bytes },
-      });
     const began = Date.now();
     const debug: any = {
       status: "running",
       actionId: input.action.action_id,
       systemPrompt: prompt,
-      userPrompt: parts[0].text,
+      userPrompt,
       schema: understandingSchema,
       model: config.model,
       protocol: config.protocol ?? "gemini",
+      sdk: "vercel-ai-sdk",
+      requestSettings: { maxOutputTokens: 1024, maxRetries: 0 },
       startedAt: new Date(began).toISOString(),
       imageFile: screenshot?.bytes ? `${hash}.input.png` : null,
       imageHash: screenshot?.bytes
@@ -218,66 +228,54 @@ export class UnderstandingService {
       input_manifest_hash: hash,
     });
     try {
-      let response: any;
-      if (config.protocol === "openai-compatible") {
-        const content: any[] = [{ type: "text", text: parts[0].text }];
-        if (screenshot?.bytes)
-          content.push({
-            type: "image_url",
-            image_url: { url: "data:image/png;base64," + screenshot.bytes },
-          });
-        const raw = await (
-          await completion(
-            config as RoleModelConfig,
-            {
-              messages: [
-                { role: "system", content: prompt },
-                { role: "user", content },
-              ],
-              response_format: {
-                type: "json_schema",
-                json_schema: {
-                  name: "screen_understanding",
-                  strict: true,
-                  schema: understandingSchema,
-                },
+      const response = await generateText({
+        model: understandingModel(config),
+        system: prompt,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: userPrompt },
+              {
+                type: "file",
+                data: Buffer.from(screenshot.bytes, "base64"),
+                mediaType: "image/png",
               },
-              max_tokens: 1024,
+            ],
+          },
+        ],
+        output: Output.object({
+          name: "screen_understanding",
+          schema: jsonSchema<{ action_title: string; action_detail: string }>(
+            understandingSchema,
+            {
+              validate: (value) =>
+                validateJsonSchemaValue(understandingSchema, value).length
+                  ? {
+                      success: false,
+                      error: new Error("invalid_understanding"),
+                    }
+                  : {
+                      success: true,
+                      value: value as {
+                        action_title: string;
+                        action_detail: string;
+                      },
+                    },
             },
-            AbortSignal.any([
-              this.controller.signal,
-              AbortSignal.timeout(30000),
-            ]),
-          )
-        ).json();
-        response = {
-          text: raw.choices?.[0]?.message?.content,
-          usageMetadata: {
-            promptTokenCount: raw.usage?.prompt_tokens,
-            candidatesTokenCount: raw.usage?.completion_tokens,
-            totalTokenCount: raw.usage?.total_tokens,
-          },
-        };
-      } else
-        response = await new GoogleGenAI({
-          apiKey: config.apiKey,
-          httpOptions: config.baseUrl ? { baseUrl: config.baseUrl } : undefined,
-        }).models.generateContent({
-          model: config.model,
-          contents: [{ role: "user", parts }],
-          config: {
-            systemInstruction: prompt,
-            responseMimeType: "application/json",
-            responseJsonSchema: understandingSchema,
-            maxOutputTokens: 1024,
-            abortSignal: AbortSignal.any([
-              this.controller.signal,
-              AbortSignal.timeout(30_000),
-            ]),
-          },
-        });
-      debug.rawOutput = String(response.text ?? "").slice(0, 64000);
-      const result = JSON.parse(response.text ?? "");
+          ),
+        }),
+        maxOutputTokens: 1024,
+        // 队列负责显式重试；SDK 不得隐式增加计费请求次数。
+        maxRetries: 0,
+        abortSignal: AbortSignal.any([
+          this.controller.signal,
+          AbortSignal.timeout(30000),
+        ]),
+      });
+      debug.rawOutput = response.text.slice(0, 64000);
+      debug.finishReason = response.finishReason;
+      const result = response.output;
       if (
         validateJsonSchemaValue(understandingSchema, result).length ||
         !result.action_title.trim() ||
@@ -298,7 +296,13 @@ export class UnderstandingService {
         manifest,
         model: config.model,
         created_at: new Date().toISOString(),
-        usage: usageOf(response.usageMetadata),
+        usage: usageOf({
+          promptTokenCount: response.usage.inputTokens,
+          cachedContentTokenCount:
+            response.usage.inputTokenDetails?.cacheReadTokens,
+          candidatesTokenCount: response.usage.outputTokens,
+          totalTokenCount: response.usage.totalTokens,
+        }),
         cached: false,
         debug: {
           ...debug,
@@ -327,12 +331,24 @@ export class UnderstandingService {
       });
       return record;
     } catch (error) {
-      const message =
-        error instanceof SyntaxError
-          ? "invalid_understanding_json"
-          : error instanceof Error && error.message === "invalid_understanding"
-            ? error.message
-            : publicModelError(error);
+      if (NoObjectGeneratedError.isInstance(error)) {
+        debug.rawOutput = error.text?.slice(0, 64000);
+        debug.finishReason = error.finishReason;
+      }
+      const message = this.controller.signal.aborted
+        ? "model_cancelled"
+        : APICallError.isInstance(error)
+          ? `understanding_http_${error.statusCode ?? "unknown"}`
+          : NoObjectGeneratedError.isInstance(error)
+            ? "invalid_understanding"
+            : error instanceof SyntaxError
+              ? "invalid_understanding_json"
+              : error instanceof Error &&
+                  error.message === "invalid_understanding"
+                ? error.message
+                : error instanceof Error && error.name === "TimeoutError"
+                  ? "understanding_request_timeout"
+                  : "understanding_request_failed";
       await this.saveTrace(String(input.action.action_id), {
         ...debug,
         status: "failed",
@@ -347,16 +363,19 @@ export class UnderstandingService {
       throw new Error(message);
     }
   }
+  /** 将动作 ID 映射为固定格式文件名，避免路径注入。 */
   private traceFile(id: string) {
     return join(
       this.cacheDir,
       "trace-" + createHash("sha256").update(id).digest("hex") + ".json",
     );
   }
+  /** 保存私有追踪文件，不通过状态事件传输完整输入。 */
   private async saveTrace(id: string, debug: unknown) {
     await mkdir(this.cacheDir, { recursive: true });
     await writeFile(this.traceFile(id), JSON.stringify(debug), { mode: 0o600 });
   }
+  /** 按需读取一次理解的完整追踪与图片，图片过期时返回空值。 */
   async trace(id: string) {
     const trace = await readFile(this.traceFile(id), "utf8")
       .then(JSON.parse)
@@ -371,6 +390,7 @@ export class UnderstandingService {
   }
 }
 
+/** 将原始动作转为中文提示，不推断操作效果或用户意图。 */
 export function actionHint(action: any) {
   const input = action.input ?? {};
   const operation = ["click", "mouse_down"].includes(action.kind)
