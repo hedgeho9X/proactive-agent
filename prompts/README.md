@@ -1,12 +1,12 @@
 # Prompt 管理
 
-本目录是本项目模型可见静态提示词的源码入口。角色文件使用 JSON 字符串数组，每个元素是一行；辅助模板与工具说明按语义键管理。
+本目录是本项目模型可见提示词的源码入口。静态 Prompt 使用反引号多行字符串；动态 Prompt 使用带类型参数的函数及 `${变量}` 插值，不使用通用字符串模板解析器。插入的用户文本不会作为代码执行。
 
-- `understanding.json`：屏幕动作事实理解 System Prompt。
-- `main.json`：主 Agent System Prompt。
-- `subagent.json`：子 Agent 职责提示。
-- `messages.json`：动作提示、理解任务、子任务包装、工具图片说明和连接测试提示。变量使用 `{{name}}`，仅单次替换，不递归解析用户文本。
-- `tools.json`：本项目注册的工具描述。工具名、参数 Schema 和执行逻辑仍由 TypeScript 管理。
+- `understanding.ts`：屏幕动作事实理解 System Prompt。
+- `main.ts`：主 Agent System Prompt。
+- `subagent.ts`：子 Agent 职责提示。
+- `messages.ts`：动作提示、理解任务、子任务包装、工具图片说明和连接测试提示。动态函数接收明确的对象参数，缺少字段会触发类型检查错误。
+- `tools.ts`：本项目注册的工具描述。工具名、参数 Schema 和执行逻辑仍由业务模块管理。
 
 修改后执行 `bun run desktop` 重新构建并启动。资源由静态导入打包进入桌面主进程及 sidecar，不依赖启动目录或运行时读取源码文件。
 

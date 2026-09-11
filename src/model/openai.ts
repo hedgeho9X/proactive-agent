@@ -1,4 +1,4 @@
-import { promptMessages, renderPrompt } from "./prompts.ts";
+import { promptMessages } from "./prompts.ts";
 import {
   LlmAdapter,
   ToolCallId,
@@ -92,7 +92,7 @@ export class OpenAIAdapter extends LlmAdapter {
                 content: [
                   {
                     type: "text",
-                    text: renderPrompt(promptMessages.toolImage, {
+                    text: promptMessages.toolImage({
                       callId: b.toolCallId,
                     }),
                   },

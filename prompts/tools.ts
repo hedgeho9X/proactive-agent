@@ -1,0 +1,14 @@
+/** 模型可见的工具描述；参数 Schema 与执行逻辑由业务模块维护。 */
+export default {
+  delegate: `将明确任务交给子 Agent，返回子会话 ID；不代表任务已经完成。`,
+  controlled_delay: `合成测试的可取消等待工具，不执行外部操作。`,
+  calendar_update_proposal: `针对指定任务版本生成日历变更提案，不执行真实日历写入。`,
+  read_observation: `读取已捕获action的AX/OCR/截图元数据；不是操作桌面`,
+  send_danmaku: `在用户桌面显示一条从右向左飘过的短提醒，不抢焦点。仅在确有价值时调用，不要复述每个操作；限频或禁用时不要立即重试。只有返回 shown 才代表已展示。`,
+  get_ax_tree: `按 Action ID 读取该时刻捕获的 AX 树和焦点信息；不是读取当前实时桌面。AX title 可能不准确。`,
+  get_ocr_content: `按 Action ID 读取该动作截图的 OCR 内容和置信度；可能识别错误，未采集时返回 unavailable。`,
+  get_annotated_image: `按 Action ID 返回该动作实际交给 AI 理解的标注图片。返回图片内容，而非仅文件路径；需要视觉模型。`,
+  read_file: `读取用户选择的测试目录内文件，最多128KB`,
+  write_proposal: `仅生成操作提案，不执行外部写入`,
+  unavailable_provider: `外部provider尚未配置，返回unavailable，不伪造结果`,
+};

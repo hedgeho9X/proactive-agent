@@ -1,28 +1,20 @@
 /** 加载独立 Prompt 资源及本机覆盖，不包含提示词正文。 */
 import { readFile, writeFile } from "node:fs/promises";
-import understanding from "../../prompts/understanding.json" with { type: "json" };
-import main from "../../prompts/main.json" with { type: "json" };
-import subagent from "../../prompts/subagent.json" with { type: "json" };
-import messages from "../../prompts/messages.json" with { type: "json" };
-import toolDescriptions from "../../prompts/tools.json" with { type: "json" };
-/** 默认角色正文，数组元素按换行连接。 */
+import understanding from "../../prompts/understanding.ts";
+import main from "../../prompts/main.ts";
+import subagent from "../../prompts/subagent.ts";
+import messages from "../../prompts/messages.ts";
+import toolDescriptions from "../../prompts/tools.ts";
+/** 默认角色正文，直接引用独立 TypeScript 模块。 */
 export const defaultPrompts = {
-  understanding: understanding.join("\n"),
-  main: main.join("\n"),
-  subagent: subagent.join("\n"),
+  understanding: understanding,
+  main: main,
+  subagent: subagent,
 };
 /** 模型可见的辅助提示模板。 */
 export const promptMessages = messages;
 /** 模型可见的工具说明。 */
 export const toolPrompts = toolDescriptions;
-/** 单次替换变量，不递归解释用户内容中的模板语法。 */
-export function renderPrompt(template: string, values: Record<string, string>) {
-  return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => {
-    if (!Object.hasOwn(values, key))
-      throw new Error("missing_prompt_variable:" + key);
-    return values[key];
-  });
-}
 /** 支持用户覆盖的三个角色。 */
 export type PromptRole = keyof typeof defaultPrompts;
 /** 合并默认文件与本机设置，保存后不改变历史请求中的 Prompt。 */

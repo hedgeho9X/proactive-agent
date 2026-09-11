@@ -15,7 +15,7 @@ import {
   type ToolDefinition,
 } from "@deepseek-ai/dsh-tools";
 import { usageOf, type ModelConfig } from "./gemini.ts";
-import { defaultPrompts, promptMessages, renderPrompt } from "./prompts.ts";
+import { defaultPrompts, promptMessages } from "./prompts.ts";
 
 /** 单次动作及其关联证据；view 决定传入模型的 AX 视图。 */
 export interface UnderstandingInput {
@@ -394,7 +394,7 @@ export class UnderstandingService {
 export function actionHint(action: any) {
   const input = action.input ?? {};
   const operation = ["click", "mouse_down"].includes(action.kind)
-    ? renderPrompt(promptMessages.click, {
+    ? promptMessages.click({
         button:
           input.button === 1
             ? promptMessages.mouseRight
@@ -404,13 +404,13 @@ export function actionHint(action: any) {
         x: String(input.x ?? promptMessages.unknown),
         y: String(input.y ?? promptMessages.unknown),
       })
-    : renderPrompt(promptMessages.key, {
+    : promptMessages.key({
         key:
           (input.modifiers ?? []).join("+") +
           (input.modifiers?.length ? "+" : "") +
           (input.key_name ?? action.kind),
       });
-  return renderPrompt(promptMessages.action, {
+  return promptMessages.action({
     operation,
     app: action.app?.name ?? promptMessages.unknown,
   });

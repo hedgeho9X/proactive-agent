@@ -3,7 +3,6 @@ import type { RoleModelConfig } from "./model/config.ts";
 import {
   defaultPrompts,
   promptMessages,
-  renderPrompt,
   toolPrompts,
 } from "./model/prompts.ts";
 import SessionQuery from "@deepseek-ai/dsh-session-query-sqlite";
@@ -382,7 +381,7 @@ export class ProactiveRuntime {
             prompt: text({
               scenario: args.prompt ? "delegated_task" : "work",
               instruction: args.prompt
-                ? renderPrompt(promptMessages.delegation, {
+                ? promptMessages.delegation({
                     system:
                       this.capabilities.prompts?.subagent ??
                       defaultPrompts.subagent,

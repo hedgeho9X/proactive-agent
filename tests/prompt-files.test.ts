@@ -3,7 +3,6 @@ import { test, expect } from "bun:test";
 import {
   defaultPrompts,
   promptMessages,
-  renderPrompt,
   toolPrompts,
 } from "../src/model/prompts.ts";
 import { build } from "esbuild";
@@ -14,19 +13,17 @@ import { spawnSync } from "node:child_process";
 
 test("角色正文来自独立文件，用户模板字符不会二次展开", async () => {
   for (const role of ["understanding", "main", "subagent"] as const) {
-    const lines = await Bun.file(
-      new URL(`../prompts/${role}.json`, import.meta.url),
-    ).json();
-    expect(defaultPrompts[role]).toBe(lines.join("\n"));
+    const resource = await import(`../prompts/${role}.ts`);
+    expect(defaultPrompts[role]).toBe(resource.default);
   }
   expect(
-    renderPrompt(promptMessages.delegation, {
+    promptMessages.delegation({
       system: "规则",
-      task: "用户写了 {{system}} 和 $&",
+      task: "用户写了 {{system}} 和 ${system} 和 $&",
     }),
-  ).toBe("规则\n任务：用户写了 {{system}} 和 $&");
-  expect(() => renderPrompt("{{missing}}", {})).toThrow(
-    "missing_prompt_variable",
+  ).toBe("规则\n任务：用户写了 {{system}} 和 ${system} 和 $&");
+  expect(promptMessages.click({ button: "鼠标左键", x: "1", y: "2" })).toBe(
+    "用户点击鼠标左键，坐标 (1, 2)",
   );
   expect(toolPrompts.delegate).toContain("子 Agent");
 });
