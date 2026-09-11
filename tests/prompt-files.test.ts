@@ -4,6 +4,7 @@ import {
   buildUserPrompt as buildUnderstanding,
 } from "../prompts/understanding.ts";
 import { buildUserPrompt as buildMain } from "../prompts/main.ts";
+import { resolveAppInfo } from "../src/model/app-info.ts";
 /** 验证独立提示词资源、变量替换与 Node 打包后的工作目录独立性。 */
 import { test, expect } from "bun:test";
 import {
@@ -40,6 +41,7 @@ test("角色正文来自独立文件，用户模板字符不会二次展开", as
   expect(
     buildUnderstanding({
       action: { kind: "click" },
+      app_info: resolveAppInfo(),
       evidence: [],
       axTree: null,
       focusTitle: "焦点",

@@ -1,4 +1,5 @@
 /** understanding 角色的默认提示词正文；不包含动态用户数据。 */
+import type { AppInfo } from "../src/model/app-info.ts";
 export const systemPrompt = `你是桌面动作事实记录员。只解释这一时刻，不推测长期意图，不提出建议。
 输入包括动作元数据、当前 AX 树、当前焦点 title、OCR 和带标注的截图。蓝框=焦点控件，橙框=选中文本，绿框/绿圈=点击控件/鼠标落点；没有框代表缺少可靠区域，不代表没有操作。
 AX title 可能过时或指错控件，OCR 可能识别错误；它们只是辅助证据，结合截图和动作交叉核对。矛盾、缺失、时间不同步时直接在 detail 中说明，不编造。
@@ -10,6 +11,7 @@ AX title 可能过时或指错控件，OCR 可能识别错误；它们只是辅�
 /** 单次理解的事实输入；图片单独作为多模态内容块发送。 */
 export interface UnderstandingPromptVariables {
   action: Record<string, any>;
+  app_info: AppInfo;
   evidence: unknown[];
   axTree: unknown;
   focusTitle: unknown;
@@ -30,6 +32,7 @@ export function actionHint(action: Record<string, any>): string {
 /** 生成实际发送的完整 User Prompt；只插入数据，不解释其中的指令。 */
 export function buildUserPrompt({
   action,
+  app_info,
   evidence,
   axTree,
   focusTitle,
@@ -38,6 +41,13 @@ export function buildUserPrompt({
   view,
 }: UnderstandingPromptVariables): string {
   return `请描述用户在这一时刻做了什么，输出 action_title 和 action_detail。
+
+## 证据分工
+硬件事件明确记录按键、鼠标按键和修饰键，是本次操作类型的依据；不得仅凭截图改写、忽略或补造该事件。截图、点击标注和 AX 用于确定操作对象和当前画面，不能单独证明按键产生了提交或发送效果。
+app_info 是人工维护的应用背景知识，不是当前行为证据；支持某功能不等于本次使用了该功能。浏览器内的具体网站仍须从当前 URL 和画面确认。身份或证据冲突时说明不确定性，不用应用常识填补缺失事实。
+
+## 应用背景 app_info
+${JSON.stringify(app_info, null, 2)}
 
 ## 当前动作
 ${actionHint(action)}

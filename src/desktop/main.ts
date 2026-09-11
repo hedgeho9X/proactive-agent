@@ -567,6 +567,9 @@ async function bootstrap() {
             value: {
               trajectory: buildMainPrompt({
                 trajectory: [trajectoryLine(actionId, action, result.result)],
+                app_info: [
+                  { action_id: actionId, info: result.app_info ?? null },
+                ],
               }),
             },
           });
@@ -591,7 +594,15 @@ async function bootstrap() {
           // 每次只让主 Agent 处理一批，空闲后再取后续已理解轨迹。
           await runtime!.request("observe", {
             actionId: batchId,
-            value: { trajectory: buildMainPrompt({ trajectory: lines }) },
+            value: {
+              trajectory: buildMainPrompt({
+                trajectory: lines,
+                app_info: items.map((item) => ({
+                  action_id: item.actionId,
+                  info: item.result.app_info ?? null,
+                })),
+              }),
+            },
           });
           await runtime!.request("idle");
           mainIdle = true;

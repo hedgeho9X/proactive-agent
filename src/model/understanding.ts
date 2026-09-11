@@ -16,6 +16,7 @@ import {
 } from "@deepseek-ai/dsh-tools";
 import { usageOf, type ModelConfig } from "./gemini.ts";
 import { defaultPrompts } from "./prompts.ts";
+import { resolveAppInfo } from "./app-info.ts";
 import { buildUserPrompt } from "../../prompts/understanding.ts";
 export { actionHint } from "../../prompts/understanding.ts";
 
@@ -23,6 +24,9 @@ export { actionHint } from "../../prompts/understanding.ts";
 function promptVariables(input: UnderstandingInput) {
   return {
     action: input.action,
+    app_info: resolveAppInfo(
+      input.action.app as { bundle_id?: unknown; name?: unknown } | undefined,
+    ),
     evidence: input.evidence,
     axTree: input.artifacts.ax?.payload?.content ?? null,
     focusTitle: input.artifacts.ax?.payload?.content?.focus_title ?? null,
@@ -290,6 +294,7 @@ export class UnderstandingService {
         throw new Error("invalid_understanding");
       const record = {
         result,
+        app_info: promptInput.app_info,
         model_role: "understanding",
         model_config: {
           protocol: config.protocol ?? "gemini",

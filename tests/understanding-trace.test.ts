@@ -45,7 +45,12 @@ test("理解追踪保留真实中文输入、图片、输出；改 Prompt 不复
   };
   const image = Buffer.from("fixture-image-bytes").toString("base64");
   const input = {
-    action: { action_id: "a", kind: "key_down", input: { key_name: "Space" } },
+    action: {
+      action_id: "a",
+      kind: "key_down",
+      input: { key_name: "Space" },
+      app: { bundle_id: "com.brave.Browser", name: "Brave Browser" },
+    },
     revision: 1,
     evidence: [],
     view: "raw" as const,
@@ -63,6 +68,10 @@ test("理解追踪保留真实中文输入、图片、输出；改 Prompt 不复
     expect(trace.userPrompt).toContain("## 当前 AX 树");
     expect(trace.promptInput.axTree.nodes[0].title).toBe("论文");
     expect(result.manifest.userPrompt).toBe(trace.userPrompt);
+    expect(trace.promptInput.app_info.definition.category).toBe("browser");
+    expect(result.app_info).toEqual(trace.promptInput.app_info);
+    expect(trace.userPrompt).toContain("硬件事件明确记录按键");
+    expect(trace.userPrompt).toContain("用户按下 Space");
     expect(trace.image).toBe(image);
     expect(requests[0].messages[1].content[1].image_url.url).toEndWith(image);
     expect(JSON.stringify(trace)).not.toContain("fixture-secret");
