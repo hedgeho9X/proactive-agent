@@ -76,6 +76,8 @@ export function projectVisualEvidence(
     axContext: { nodes, url: ax.url, title: ax.title, coverage: ax.coverage },
     screenshotMetadata: {
       frame: image.frame,
+      pixel_width: image.pixelWidth,
+      pixel_height: image.pixelHeight,
       timing: image.timing,
       captured_at: image.capturedAt,
       annotated: image.annotated,

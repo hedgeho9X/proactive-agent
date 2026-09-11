@@ -1,3 +1,4 @@
+/** 验证模型实际输入、证据追踪和角色配置，不使用真实用户数据。 */
 import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -55,8 +56,26 @@ test("理解追踪保留真实中文输入、图片、输出；改 Prompt 不复
     evidence: [],
     view: "raw" as const,
     artifacts: {
-      screenshot: { bytes: image, payload: { content: { annotated: true } } },
-      ax: { payload: { content: { nodes: [{ title: "论文" }] } } },
+      screenshot: {
+        bytes: image,
+        payload: {
+          content: {
+            annotated: true,
+            coordinateSpace: "screen_top_left_points",
+            frame: { x: 100, y: 50, width: 800, height: 600 },
+            pixelWidth: 1600,
+            pixelHeight: 1200,
+          },
+        },
+      },
+      ax: {
+        payload: {
+          content: {
+            nodes: [{ title: "论文" }],
+            raw_nodes: [{ diagnostic: "raw-attribute-marker" }],
+          },
+        },
+      },
     },
   };
   try {
@@ -65,13 +84,19 @@ test("理解追踪保留真实中文输入、图片、输出；改 Prompt 不复
     expect(result.result.action_title).toBe("在论文页面按下空格");
     expect(trace.systemPrompt).toBe(requests[0].messages[0].content);
     expect(trace.userPrompt).toBe(requests[0].messages[1].content[0].text);
-    expect(trace.userPrompt).toContain("## 当前 AX 树");
+    expect(trace.userPrompt).toContain("<ax_context>");
     expect(trace.promptInput.axTree.nodes[0].title).toBe("论文");
     expect(result.manifest.userPrompt).toBe(trace.userPrompt);
+    expect(trace.userPrompt).not.toContain("raw-attribute-marker");
+    expect(trace.promptInput.axTree.raw_nodes[0].diagnostic).toBe(
+      "raw-attribute-marker",
+    );
+    expect(trace.userPrompt).toContain('"pixel_width": 1600');
+    expect(trace.userPrompt).toContain("screen_top_left_points");
     expect(trace.promptInput.app_info.definition.category).toBe("browser");
     expect(result.app_info).toEqual(trace.promptInput.app_info);
-    expect(trace.userPrompt).toContain("硬件事件明确记录按键");
-    expect(trace.userPrompt).toContain("用户按下 Space");
+    expect(trace.systemPrompt).toContain("以记录的按键、鼠标按钮、修饰键");
+    expect(trace.userPrompt).toContain('"key_name": "Space"');
     expect(trace.image).toBe(image);
     expect(requests[0].messages[1].content[1].image_url.url).toEndWith(image);
     expect(JSON.stringify(trace)).not.toContain("fixture-secret");

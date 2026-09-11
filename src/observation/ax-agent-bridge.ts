@@ -1,6 +1,7 @@
+/** 将已保存快照适配为模型证据；保留来源，不重新采集或改变窗口身份。 */
 import { createHash } from "node:crypto";
 import { filterAX } from "./filter.ts";
-// 按需适配已有快照，不再复制一份截图进另一套数据库。
+/** 构建动作和证据视图，保护标记优先于模型可见内容。 */
 export function axObservation(snapshot: any) {
   const event = snapshot.trigger ?? {};
   const id = snapshot.snapshotId;
@@ -136,6 +137,12 @@ export function axObservation(snapshot: any) {
               {
                 frame: snapshot.screenshot.frame,
                 regions: snapshot.screenshot.regions,
+                coordinateSpace: snapshot.screenshot.coordinateSpace,
+                pixelWidth: snapshot.screenshot.pixelWidth,
+                pixelHeight: snapshot.screenshot.pixelHeight,
+                shadowsExcluded: snapshot.screenshot.shadowsExcluded,
+                capturedAt: snapshot.screenshot.capturedAt,
+                timing: snapshot.timing,
               },
               snapshot.screenshot.data,
             )

@@ -1,3 +1,4 @@
+/** 验证独立提示词资源、变量替换与 Node 打包后的工作目录独立性。 */
 import { buildUserPrompt as buildSubagent } from "../prompts/subagent.ts";
 import {
   actionHint,
@@ -5,7 +6,6 @@ import {
 } from "../prompts/understanding.ts";
 import { buildUserPrompt as buildMain } from "../prompts/main.ts";
 import { resolveAppInfo } from "../src/model/app-info.ts";
-/** 验证独立提示词资源、变量替换与 Node 打包后的工作目录独立性。 */
 import { test, expect } from "bun:test";
 import {
   defaultPrompts,
@@ -49,7 +49,7 @@ test("角色正文来自独立文件，用户模板字符不会二次展开", as
       screenshot: null,
       view: "raw",
     }),
-  ).toContain("## 当前焦点 title");
+  ).toContain("<focused_element>");
   expect(toolPrompts.delegate).toContain("子 Agent");
 });
 
