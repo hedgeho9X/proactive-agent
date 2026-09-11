@@ -15,7 +15,7 @@ import {
   type ToolDefinition,
 } from "@deepseek-ai/dsh-tools";
 import { usageOf, type ModelConfig } from "./gemini.ts";
-import { defaultPrompts } from "./prompts.ts";
+import { defaultPrompts, promptMessages, renderPrompt } from "./prompts.ts";
 
 /** 单次动作及其关联证据；view 决定传入模型的 AX 视图。 */
 export interface UnderstandingInput {
@@ -184,7 +184,7 @@ export class UnderstandingService {
       ]),
     );
     const userPrompt = JSON.stringify({
-      任务: "请描述用户在这一时刻做了什么，输出 action_title 和 action_detail。",
+      任务: promptMessages.understandingTask,
       动作提示: actionHint(input.action),
       action: input.action,
       evidence: input.evidence,
@@ -394,7 +394,24 @@ export class UnderstandingService {
 export function actionHint(action: any) {
   const input = action.input ?? {};
   const operation = ["click", "mouse_down"].includes(action.kind)
-    ? `用户点击${input.button === 1 ? "鼠标右键" : input.button === 2 ? "鼠标中键" : "鼠标左键"}，坐标 (${input.x ?? "未知"}, ${input.y ?? "未知"})`
-    : `用户按下 ${(input.modifiers ?? []).join("+")}${input.modifiers?.length ? "+" : ""}${input.key_name ?? action.kind}`;
-  return `${operation}。当前应用：${action.app?.name ?? "未知"}。只依据当前证据描述，不自动认定提交成功。`;
+    ? renderPrompt(promptMessages.click, {
+        button:
+          input.button === 1
+            ? promptMessages.mouseRight
+            : input.button === 2
+              ? promptMessages.mouseMiddle
+              : promptMessages.mouseLeft,
+        x: String(input.x ?? promptMessages.unknown),
+        y: String(input.y ?? promptMessages.unknown),
+      })
+    : renderPrompt(promptMessages.key, {
+        key:
+          (input.modifiers ?? []).join("+") +
+          (input.modifiers?.length ? "+" : "") +
+          (input.key_name ?? action.kind),
+      });
+  return renderPrompt(promptMessages.action, {
+    operation,
+    app: action.app?.name ?? promptMessages.unknown,
+  });
 }

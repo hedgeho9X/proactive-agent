@@ -1,3 +1,4 @@
+import { toolPrompts } from "./prompts.ts";
 import type { Context } from "@deepseek-ai/cordis";
 import type { ToolDefinition } from "@deepseek-ai/dsh-tools";
 import { realpath, readFile, stat } from "node:fs/promises";
@@ -62,7 +63,7 @@ export function registerCapabilities(
     });
   tool(
     "read_observation",
-    "读取已捕获action的AX/OCR/截图元数据；不是操作桌面",
+    toolPrompts.read_observation,
     { action_id: { type: "string" } },
     ["action_id"],
     async (args) => {
@@ -73,7 +74,7 @@ export function registerCapabilities(
   );
   tool(
     "send_danmaku",
-    "在用户桌面显示一条从右向左飘过的短提醒，不抢焦点。仅在确有价值时调用，不要复述每个操作；限频或禁用时不要立即重试。只有返回 shown 才代表已展示。",
+    toolPrompts.send_danmaku,
     {
       text: { type: "string", minLength: 1, maxLength: 80 },
       duration_seconds: { type: "number", minimum: 4, maximum: 12 },
@@ -89,16 +90,8 @@ export function registerCapabilities(
     },
   );
   for (const [name, part, description] of [
-    [
-      "get_ax_tree",
-      "ax",
-      "按 Action ID 读取该时刻捕获的 AX 树和焦点信息；不是读取当前实时桌面。AX title 可能不准确。",
-    ],
-    [
-      "get_ocr_content",
-      "ocr",
-      "按 Action ID 读取该动作截图的 OCR 内容和置信度；可能识别错误，未采集时返回 unavailable。",
-    ],
+    ["get_ax_tree", "ax", toolPrompts.get_ax_tree],
+    ["get_ocr_content", "ocr", toolPrompts.get_ocr_content],
   ] as const)
     tool(
       name,
@@ -112,8 +105,7 @@ export function registerCapabilities(
     );
   ctx.tools.register({
     name: "get_annotated_image",
-    description:
-      "按 Action ID 返回该动作实际交给 AI 理解的标注图片。返回图片内容，而非仅文件路径；需要视觉模型。",
+    description: toolPrompts.get_annotated_image,
     parameters: {
       type: "object",
       properties: { action_id: { type: "string" } },
@@ -152,7 +144,7 @@ export function registerCapabilities(
   });
   tool(
     "read_file",
-    "读取用户选择的测试目录内文件，最多128KB",
+    toolPrompts.read_file,
     { path: { type: "string" } },
     ["path"],
     async (args) => {
@@ -171,7 +163,7 @@ export function registerCapabilities(
   ]) {
     tool(
       operation,
-      "仅生成操作提案，不执行外部写入",
+      toolPrompts.write_proposal,
       {
         target: { type: "string" },
         content: { type: "string" },
@@ -226,7 +218,7 @@ export function registerCapabilities(
   ])
     tool(
       name,
-      "外部provider尚未配置，返回unavailable，不伪造结果",
+      toolPrompts.unavailable_provider,
       { query: { type: "string" } },
       ["query"],
       async () => ({

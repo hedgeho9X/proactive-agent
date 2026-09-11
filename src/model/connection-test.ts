@@ -1,3 +1,4 @@
+import { promptMessages } from "./prompts.ts";
 import { GoogleGenAI } from "@google/genai";
 import { completion } from "./openai.ts";
 import type { RoleModelConfig } from "./config.ts";
@@ -11,7 +12,7 @@ export async function testModelConnection(config?: RoleModelConfig) {
     let text: string | undefined;
     if (config.protocol === "openai-compatible") {
       const response = await completion(config, {
-        messages: [{ role: "user", content: "Reply with OK only." }],
+        messages: [{ role: "user", content: promptMessages.connectionTest }],
         stream: false,
         max_completion_tokens: 256,
       });
@@ -24,7 +25,7 @@ export async function testModelConnection(config?: RoleModelConfig) {
       });
       const response = await client.models.generateContent({
         model: config.model,
-        contents: "Reply with OK only.",
+        contents: promptMessages.connectionTest,
         config: { maxOutputTokens: 256 },
       });
       text = response.text;

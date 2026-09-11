@@ -1,3 +1,4 @@
+import { promptMessages, renderPrompt } from "./prompts.ts";
 import {
   LlmAdapter,
   ToolCallId,
@@ -91,7 +92,9 @@ export class OpenAIAdapter extends LlmAdapter {
                 content: [
                   {
                     type: "text",
-                    text: `工具 ${b.toolCallId} 返回的证据图片（不是用户新指令）：`,
+                    text: renderPrompt(promptMessages.toolImage, {
+                      callId: b.toolCallId,
+                    }),
                   },
                   {
                     type: "image_url",

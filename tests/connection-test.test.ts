@@ -31,9 +31,7 @@ test("连接测试验证真实HTTP路径、角色模型、鉴权、空响应和�
     expect(path).toBe("/v1/chat/completions");
     expect(authorization).toBe("Bearer fixture-key");
     expect(body.model).toBe("fixture-model");
-    expect(body.messages).toEqual([
-      { role: "user", content: "Reply with OK only." },
-    ]);
+    expect(body.messages).toEqual([{ role: "user", content: "仅回复 OK。" }]);
     mode = "empty";
     expect((await testModelConnection(config)).ok).toBe(false);
     mode = "error";

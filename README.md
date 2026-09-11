@@ -1,5 +1,7 @@
 # Proactive Lab
 
+所有项目自有静态 Prompt 集中在 [prompts/](prompts/README.md)，角色、动作模板与工具说明分文件管理。
+
 独立 macOS 主动式 Agent 实验应用：原生动作与证据采集、React 调试工作台、DSH 主子代理，以及基于 Vercel AI SDK 的屏幕事实理解。默认采集关闭，无模型凭证时显示 unavailable；Fixture 演示不调用真实模型。
 
 使用 Bun 1.3.14+、macOS Swift 工具链。安装执行 `bun install --frozen-lockfile`；`bun run desktop` 编译并启动；`bun run package:mac` 生成独立 `.app`。桌面使用 Electron 自身的 Node 运行编译JS sidecar，不依赖用户机器上的系统 Node。

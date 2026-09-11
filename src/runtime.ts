@@ -1,6 +1,11 @@
 import { OpenAIAdapter } from "./model/openai.ts";
 import type { RoleModelConfig } from "./model/config.ts";
-import { defaultPrompts } from "./model/prompts.ts";
+import {
+  defaultPrompts,
+  promptMessages,
+  renderPrompt,
+  toolPrompts,
+} from "./model/prompts.ts";
 import SessionQuery from "@deepseek-ai/dsh-session-query-sqlite";
 import { GeminiAdapter, type ModelConfig } from "./model/gemini.ts";
 import {
@@ -329,7 +334,7 @@ export class ProactiveRuntime {
     ) =>
       ctx.tools.register({
         name,
-        description: name,
+        description: toolPrompts[name as keyof typeof toolPrompts],
         parameters,
         execute,
         output: { schema, render: (_args, value) => text(value) },
@@ -377,11 +382,13 @@ export class ProactiveRuntime {
             prompt: text({
               scenario: args.prompt ? "delegated_task" : "work",
               instruction: args.prompt
-                ? (this.capabilities.prompts?.subagent ??
-                    defaultPrompts.subagent) +
-                  "\n任务：" +
-                  args.prompt
-                : "合成任务",
+                ? renderPrompt(promptMessages.delegation, {
+                    system:
+                      this.capabilities.prompts?.subagent ??
+                      defaultPrompts.subagent,
+                    task: args.prompt,
+                  })
+                : promptMessages.fixtureTask,
               revision: task.revision,
               taskId: task.taskId,
               target: task.target,
