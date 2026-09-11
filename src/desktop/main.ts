@@ -45,6 +45,7 @@ import { DesktopDanmaku } from "./danmaku.ts";
 import { HistoryClear } from "../observation/clear-history.ts";
 import { PromptStore, type PromptRole } from "../model/prompts.ts";
 import { prepareEvidence } from "../observation/prepare-evidence.ts";
+import { buildUserPrompt as buildMainPrompt } from "../../prompts/main.ts";
 import { trajectoryLine } from "../model/trajectory.ts";
 import { createHash } from "node:crypto";
 import { captureDiagnostic } from "../observation/capture-diagnostics.ts";
@@ -338,7 +339,9 @@ async function startRuntime(fixture: boolean) {
             }
           : { status: "unavailable", reason: "model_input_image_not_saved" };
       const ocr = trace
-        ? JSON.parse(trace.userPrompt)?.artifacts?.ocr?.payload?.content
+        ? trace.promptInput
+          ? trace.promptInput.ocr
+          : JSON.parse(trace.userPrompt)?.artifacts?.ocr?.payload?.content
         : item.artifacts.ocr?.payload?.content;
       return {
         action_id: id,
@@ -562,7 +565,9 @@ async function bootstrap() {
           return runtime!.request("observe", {
             actionId: "understood:" + actionId,
             value: {
-              trajectory: trajectoryLine(actionId, action, result.result),
+              trajectory: buildMainPrompt({
+                trajectory: [trajectoryLine(actionId, action, result.result)],
+              }),
             },
           });
         },
@@ -586,7 +591,7 @@ async function bootstrap() {
           // 每次只让主 Agent 处理一批，空闲后再取后续已理解轨迹。
           await runtime!.request("observe", {
             actionId: batchId,
-            value: { trajectory: lines.join("\n") },
+            value: { trajectory: buildMainPrompt({ trajectory: lines }) },
           });
           await runtime!.request("idle");
           mainIdle = true;

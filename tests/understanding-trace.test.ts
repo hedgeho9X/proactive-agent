@@ -60,6 +60,9 @@ test("理解追踪保留真实中文输入、图片、输出；改 Prompt 不复
     expect(result.result.action_title).toBe("在论文页面按下空格");
     expect(trace.systemPrompt).toBe(requests[0].messages[0].content);
     expect(trace.userPrompt).toBe(requests[0].messages[1].content[0].text);
+    expect(trace.userPrompt).toContain("## 当前 AX 树");
+    expect(trace.promptInput.axTree.nodes[0].title).toBe("论文");
+    expect(result.manifest.userPrompt).toBe(trace.userPrompt);
     expect(trace.image).toBe(image);
     expect(requests[0].messages[1].content[1].image_url.url).toEndWith(image);
     expect(JSON.stringify(trace)).not.toContain("fixture-secret");

@@ -15,8 +15,22 @@ import {
   type ToolDefinition,
 } from "@deepseek-ai/dsh-tools";
 import { usageOf, type ModelConfig } from "./gemini.ts";
-import { defaultPrompts, promptMessages } from "./prompts.ts";
+import { defaultPrompts } from "./prompts.ts";
+import { buildUserPrompt } from "../../prompts/understanding.ts";
+export { actionHint } from "../../prompts/understanding.ts";
 
+/** 提取模板变量，不包含图片字节；同一组变量用于请求、缓存及追踪。 */
+function promptVariables(input: UnderstandingInput) {
+  return {
+    action: input.action,
+    evidence: input.evidence,
+    axTree: input.artifacts.ax?.payload?.content ?? null,
+    focusTitle: input.artifacts.ax?.payload?.content?.focus_title ?? null,
+    ocr: input.artifacts.ocr?.payload?.content ?? null,
+    screenshot: input.artifacts.screenshot?.payload?.content ?? null,
+    view: input.view,
+  };
+}
 /** 单次动作及其关联证据；view 决定传入模型的 AX 视图。 */
 export interface UnderstandingInput {
   action: Record<string, unknown>;
@@ -104,9 +118,10 @@ export function inputManifest(
     ]),
   );
   const manifest = {
-    schema: "understanding-v3-ai-sdk",
+    schema: "understanding-v4-role-template",
     prompt_version: 3,
     prompt,
+    userPrompt: buildUserPrompt(promptVariables(input)),
     model,
     ...input,
     artifacts,
@@ -177,20 +192,8 @@ export class UnderstandingService {
     hash: string,
     prompt: string,
   ) {
-    const safeArtifacts = Object.fromEntries(
-      Object.entries(input.artifacts).map(([kind, a]) => [
-        kind,
-        a ? { ...a, bytes: undefined } : null,
-      ]),
-    );
-    const userPrompt = JSON.stringify({
-      任务: promptMessages.understandingTask,
-      动作提示: actionHint(input.action),
-      action: input.action,
-      evidence: input.evidence,
-      artifacts: safeArtifacts,
-      view: input.view,
-    });
+    const promptInput = promptVariables(input);
+    const userPrompt = buildUserPrompt(promptInput);
     const screenshot = input.artifacts.screenshot;
     const began = Date.now();
     const debug: any = {
@@ -198,6 +201,7 @@ export class UnderstandingService {
       actionId: input.action.action_id,
       systemPrompt: prompt,
       userPrompt,
+      promptInput,
       schema: understandingSchema,
       model: config.model,
       protocol: config.protocol ?? "gemini",
@@ -388,30 +392,4 @@ export class UnderstandingService {
       : null;
     return { ...trace, image };
   }
-}
-
-/** 将原始动作转为中文提示，不推断操作效果或用户意图。 */
-export function actionHint(action: any) {
-  const input = action.input ?? {};
-  const operation = ["click", "mouse_down"].includes(action.kind)
-    ? promptMessages.click({
-        button:
-          input.button === 1
-            ? promptMessages.mouseRight
-            : input.button === 2
-              ? promptMessages.mouseMiddle
-              : promptMessages.mouseLeft,
-        x: String(input.x ?? promptMessages.unknown),
-        y: String(input.y ?? promptMessages.unknown),
-      })
-    : promptMessages.key({
-        key:
-          (input.modifiers ?? []).join("+") +
-          (input.modifiers?.length ? "+" : "") +
-          (input.key_name ?? action.kind),
-      });
-  return promptMessages.action({
-    operation,
-    app: action.app?.name ?? promptMessages.unknown,
-  });
 }

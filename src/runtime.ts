@@ -1,10 +1,7 @@
+import { buildUserPrompt as buildSubagentPrompt } from "../prompts/subagent.ts";
 import { OpenAIAdapter } from "./model/openai.ts";
 import type { RoleModelConfig } from "./model/config.ts";
-import {
-  defaultPrompts,
-  promptMessages,
-  toolPrompts,
-} from "./model/prompts.ts";
+import { defaultPrompts, toolPrompts } from "./model/prompts.ts";
 import SessionQuery from "@deepseek-ai/dsh-session-query-sqlite";
 import { GeminiAdapter, type ModelConfig } from "./model/gemini.ts";
 import {
@@ -378,20 +375,28 @@ export class ProactiveRuntime {
                   },
                 }
               : {}),
-            prompt: text({
-              scenario: args.prompt ? "delegated_task" : "work",
-              instruction: args.prompt
-                ? promptMessages.delegation({
-                    system:
-                      this.capabilities.prompts?.subagent ??
-                      defaultPrompts.subagent,
-                    task: args.prompt,
-                  })
-                : promptMessages.fixtureTask,
-              revision: task.revision,
-              taskId: task.taskId,
-              target: task.target,
-            }),
+            prompt: args.prompt
+              ? [
+                  {
+                    type: "text",
+                    text: buildSubagentPrompt({
+                      system:
+                        this.capabilities.prompts?.subagent ??
+                        defaultPrompts.subagent,
+                      task: args.prompt,
+                      taskId: task.taskId,
+                      revision: task.revision,
+                      target: task.target,
+                    }),
+                  },
+                ]
+              : text({
+                  scenario: "work",
+                  instruction: "合成任务",
+                  revision: task.revision,
+                  taskId: task.taskId,
+                  target: task.target,
+                }),
             maxDepth: 1,
           },
           signal: exec.signal,
