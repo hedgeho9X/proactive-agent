@@ -3,6 +3,7 @@ import { AXRecordDetails } from "./ax-record-details.tsx";
 import { PromptSettings } from "./prompt-settings.tsx";
 import { FocusOverlay } from "./focus-overlay.tsx";
 import { projectAXRecords } from "./ax-stream.ts";
+import { isUnprocessedRecord } from "./record-filter.ts";
 import {
   routingOptions,
   defaultRouting,
@@ -608,7 +609,7 @@ function App() {
         (sourceFilter === "understood"
           ? !!row.detail?.actionTitle
           : sourceFilter === "queue"
-            ? !!row.detail?.axRecord
+            ? isUnprocessedRecord(row)
             : !row.detail?.axRecord && row.kind !== "action") &&
         (!eventFilter ||
           [row.label, row.text, row.id]
@@ -783,7 +784,7 @@ function App() {
             onChange={(e) => setSourceFilter(e.target.value)}
           >
             <option value="understood">已理解事件</option>
-            <option value="queue">队列／原始记录</option>
+            <option value="queue">未处理原始记录</option>
             <option value="agent">主 Agent／工具</option>
           </select>
           <Button
@@ -795,7 +796,7 @@ function App() {
           >
             {sourceFilter === "queue"
               ? "返回已理解事件"
-              : `队列／原始记录（${axRows.filter((row) => !row.detail.actionTitle).length}）`}
+              : `未处理原始记录（${axRows.filter(isUnprocessedRecord).length}）`}
           </Button>
           <Button
             size="sm"
@@ -810,7 +811,7 @@ function App() {
             {state.clearing ? "正在清空…" : "清空全部本地历史"}
           </Button>
           <span className="text-xs text-muted-foreground">
-            主列表仅显示理解完成的事件；原始证据与失败可在队列查看
+            原始记录仅显示待处理、理解中及未成功理解的失败记录
           </span>
         </div>
         <Separator />
