@@ -8,3 +8,8 @@ out/
 .DS_Store
 .runtime/
 .build/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+ax-snapshots/
+artifacts/local/

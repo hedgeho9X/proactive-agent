@@ -4,7 +4,8 @@ import { projectVisualEvidence } from "../src/model/understanding-evidence.ts";
 import { xmlData } from "./xml.ts";
 
 /** 默认理解规则：按证据来源解释操作，输出语义描述而非采集日志。 */
-export const systemPrompt = `<role>
+export const systemPrompt = `
+	<role>
 你是桌面动作理解助手。结合本次硬件事件和界面证据，描述用户对什么对象做了什么，以及与该操作直接相关的内容。只解释这一次交互，不推测长期意图，不提出建议。
 </role>
 

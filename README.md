@@ -1,5 +1,28 @@
 # Proactive Lab
 
+macOS 主动式 Agent 实验项目，采用 [Apache-2.0](LICENSE) 许可证。当前是开发原型，不是完整生产产品。
+
+## 从源码运行
+
+需要 macOS 15+、Xcode Command Line Tools / Swift 和 Bun 1.3.14+。
+
+```bash
+git clone https://github.com/hedgeho9X/proactive-agent.git # 获取源码
+cd proactive-agent # 进入项目
+bun install --frozen-lockfile # 安装依赖
+bun run desktop # 构建并启动桌面应用
+```
+
+启动后在设置里填写自己的模型服务地址、Model ID 和 API Key，并由你在 macOS 中授权辅助功能、输入监控和屏幕录制。默认服务地址与模型名是开发配置，不代表公开免费服务，请按自己可用的接口修改。Tavily 为可选配置；没有配置时不开放 Web 工具。
+
+## 数据与隐私
+
+启动观察后会采集其他应用的窗口截图、AX 和输入活动，编辑会话可能保存应用暴露的输入框全文。数据默认保存在本机 Application Support/Proactive Lab 中，不属于 Git 仓库；开启 AI 理解后，选中的截图和文字会发往你配置的模型服务，Web 工具会向配置的搜索服务发送查询。
+
+安全输入与 AX 安全文本控件会被排除，但这不是完整的敏感信息检测器。请勿在处理敏感信息时开启观察，也不要把自己的历史数据、配置文件或包含正文的 Trace 上传到 issue。问题反馈优先使用合成数据和脱敏错误码。详情见 [安全说明](SECURITY.md)。
+
+本轮详情结构为「截图 / 原始输入 Prompt / 观测 / AX 树」，观测提供运行、轮次与工具的 Span 树；截图优先使用实际模型输入图。编辑过程持续保存证据，但不逐条触发理解，见 [编辑会话边界](docs/EDITING-SESSIONS.md)。AX 能力和截图可用性依赖目标应用；发送成功确认、可靠跨应用最终行为归并仍未完成。
+
 屏幕理解支持有界 Agentic 取证：历史标题、动作详情、图片、AX/OCR 和应用背景；设置中配置 Tavily Key 后启用网页搜索和提取。调用步骤可在 AI 请求详情中查看，见 [Agentic Understanding](docs/AGENTIC-UNDERSTANDING.md)。
 
 所有项目自有静态 Prompt 集中在 [prompts/](prompts/README.md)，角色、动作模板与工具说明分文件管理。
@@ -18,7 +41,7 @@ API Key 在本机通过 Electron safeStorage（macOS 系统钥匙串）加密保
 
 ## 桌面弹幕与详情侧栏
 
-详情默认先展示 AI 理解和截图，采集诊断、AX 和原始记录折叠收纳；截图标注固定默认显示，无需配置颜色或透明度。详见 [详情展示](docs/DETAIL-LAYOUT.md)。
+详情顶部展示 AI 理解，截图与 Prompt、观测分 Tab；AX 和采集诊断默认折叠，截图标注固定默认显示，无需配置颜色或透明度。当前结构见 [理解追踪](docs/UNDERSTANDING-TRACE.md)。
 
 - 点击详情侧栏外部或切换到桌面、其他应用时自动收起；截图放大与右键复制菜单仍可正常使用。
 - 设置 →「测试桌面弹幕」无需模型即可预览。也可以清除弹幕或关闭弹幕；开关只对本次启动生效，重启默认开启。
