@@ -1,9 +1,9 @@
 /** 调用树投影回归：重复工具依靠调用 ID 配对，失败和未归属节点不丢失。 */
 import { test, expect } from "bun:test";
-import { understandingChain } from "../src/renderer/understanding-chain.tsx";
+import { traceSpans } from "../src/renderer/trace-model.ts";
 
 test("重复工具正确归属轮次并保留错误、输入和投递阻塞", () => {
-  const nodes = understandingChain({
+  const nodes = traceSpans({
     steps: [
       {
         step: 1,
@@ -30,10 +30,22 @@ test("重复工具正确归属轮次并保留错误、输入和投递阻塞", ()
     ],
     delivery: { status: "ready", waitingFor: { actionId: "earlier" } },
   });
-  expect(nodes.find((n) => n.id === "tool-a")?.output).toEqual(["first"]);
-  expect(nodes.find((n) => n.id === "tool-b")?.meta.error).toBe(
-    "action_missing",
-  );
-  expect(nodes.find((n) => n.id === "unlinked-2")?.depth).toBe(0);
-  expect(nodes.at(-1)?.meta.waitingFor).toEqual({ actionId: "earlier" });
+  expect(nodes.find((n) => n.id === "tool-0")?.output).toEqual(["first"]);
+  expect(nodes.find((n) => n.id === "tool-1")?.error).toBe("action_missing");
+  expect(nodes.find((n) => n.id === "tool-2")?.parentId).toBe("run");
+  expect(nodes.find((n) => n.id === "tool-0")?.parentId).toBe("turn-1");
+  expect(nodes.find((n) => n.id === "tool-1")?.parentId).toBe("turn-2");
+  expect(nodes.some((n) => n.name.includes("context"))).toBe(false);
+});
+
+test("进行中的工具使用已记录轮次挂到 turn，不等待模型结束才归属", () => {
+  const spans = traceSpans({
+    status: "running",
+    steps: [{ step: 1, status: "running" }],
+    toolCalls: [
+      { name: "get_action_ax", step: 1, status: "running", elapsedMs: 0 },
+    ],
+  });
+  expect(spans.at(-1)?.parentId).toBe("turn-1");
+  expect(spans.at(-1)?.elapsedMs).toBeUndefined();
 });

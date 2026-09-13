@@ -2,6 +2,10 @@
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AXRecordDetails } from "../src/renderer/ax-record-details.tsx";
+import {
+  UnderstandingText,
+  understandingCost,
+} from "../src/renderer/understanding-row.tsx";
 
 const canvas = document.createElement("canvas");
 canvas.width = 1200;
@@ -76,6 +80,42 @@ const api = {
             systemPrompt: "合成 System Prompt",
             userPrompt: "合成 User Prompt",
             rawOutput: JSON.stringify(summary),
+            actionId: "fixture-action",
+            startedAt: "2026-09-13T12:00:00Z",
+            steps: [
+              {
+                step: 1,
+                status: "completed",
+                elapsedMs: 180,
+                startedAt: "2026-09-13T12:00:00Z",
+                messages: [{ role: "user", content: "查看当前选中的目录" }],
+                usage: { inputTokens: 950, outputTokens: 30 },
+                toolCalls: [
+                  {
+                    toolCallId: "lookup",
+                    toolName: "get_action_ax",
+                    input: { action_id: "fixture-action" },
+                  },
+                ],
+              },
+              {
+                step: 2,
+                status: "completed",
+                elapsedMs: 70,
+                text: JSON.stringify(summary),
+              },
+            ],
+            toolCalls: [
+              {
+                step: 1,
+                toolCallId: "lookup",
+                name: "get_action_ax",
+                status: "completed",
+                elapsedMs: 5,
+                input: { action_id: "fixture-action" },
+                result: { focused: "Open", role: "AXButton" },
+              },
+            ],
           };
     if (method === "ax.copyImage") {
       (window as any).copiedFixtureImage = params.dataUrl;
@@ -105,6 +145,17 @@ function Preview() {
           ))}
         </nav>
       </header>
+      <button className="event-row w-full" data-understood="true">
+        <span className="event-time">09-13 20:00:00</span>
+        <span className="event-kind">示例应用</span>
+        <UnderstandingText
+          title={summary.action_title}
+          detail={summary.action_detail}
+        />
+        <span className="text-xs text-muted-foreground">
+          {understandingCost({ totalTokens: 980, elapsedMs: 250 })}
+        </span>
+      </button>
       <AXRecordDetails
         key={id}
         recordId={id}

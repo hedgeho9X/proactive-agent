@@ -11,11 +11,19 @@ export function AITrace({
   status,
   reason,
   summary,
+  panels,
 }: {
   id: string;
   status?: string;
   reason?: string;
   summary?: { action_title?: string; action_detail?: string };
+  panels?: {
+    screenshot?: any;
+    trigger?: any;
+    ax?: React.ReactNode;
+    diagnostics?: React.ReactNode;
+    actions?: React.ReactNode;
+  };
 }) {
   const [trace, setTrace] = useState<any>(null);
   const [error, setError] = useState("");
@@ -94,83 +102,75 @@ export function AITrace({
           重试处理
         </Button>
       )}
-      <DetailDisclosure title="查看 AI 请求详情">
-        <p className="text-xs text-muted-foreground">
-          {trace
-            ? `${trace.model} · ${trace.status} · ${trace.elapsedMs ?? "…"} ms`
-            : "完整追踪暂不可用"}{" "}
-          {reason} {error}
-        </p>
-        {trace ? (
-          <Tabs defaultValue="chain">
-            <TabsList variant="line">
-              <TabsTrigger value="chain">调用链</TabsTrigger>
-              <TabsTrigger value="output">输出</TabsTrigger>
-              <TabsTrigger value="prompt">中文 Prompt</TabsTrigger>
-              <TabsTrigger value="image">AI 看到的图片</TabsTrigger>
-              <TabsTrigger value="input">完整输入</TabsTrigger>
-              <TabsTrigger value="steps">模型步骤</TabsTrigger>
-            </TabsList>
-            <TabsContent value="chain">
-              <UnderstandingChain key={id} trace={trace} />
-            </TabsContent>
-            <TabsContent value="output" className="flex flex-col gap-3">
-              <details>
-                <summary>模型原始输出</summary>
-                <pre className="whitespace-pre-wrap break-all text-xs">
-                  {trace.rawOutput ?? "尚未返回"}
-                </pre>
-              </details>
-            </TabsContent>
-            <TabsContent value="prompt">
+      {panels?.actions}
+      <Tabs key={id} defaultValue="image">
+        <TabsList variant="line">
+          <TabsTrigger value="image">截图</TabsTrigger>
+          <TabsTrigger value="prompt">原始输入 Prompt</TabsTrigger>
+          <TabsTrigger value="trace">观测</TabsTrigger>
+          <TabsTrigger value="ax">AX 树</TabsTrigger>
+        </TabsList>
+        <TabsContent value="image">
+          {trace?.image ? (
+            <FocusOverlay
+              key={trace.imageHash}
+              screenshot={{ data: trace.image, annotated: true }}
+            />
+          ) : panels?.screenshot?.data ? (
+            <>
               <p className="mb-2 text-xs text-muted-foreground">
-                这是本次请求实际使用的 Prompt；修改未来请求请到设置。
+                当前采集的标注预览；模型输入图尚未生成或缓存已过期。
               </p>
-              <pre className="whitespace-pre-wrap break-all text-sm">
+              <FocusOverlay
+                screenshot={panels.screenshot}
+                trigger={panels.trigger}
+              />
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              没有可用截图：
+              {panels?.screenshot?.reason ?? "尚未采集或图片已过期"}
+              。完整诊断见观测。
+            </p>
+          )}
+          {trace?.image && (
+            <p className="mt-2 break-all text-xs text-muted-foreground">
+              与模型输入共用同一张图片 · SHA256 {trace.imageHash}
+            </p>
+          )}
+        </TabsContent>
+        <TabsContent value="prompt">
+          {trace ? (
+            <div className="flex flex-col gap-3">
+              <h4 className="font-medium">System</h4>
+              <pre className="whitespace-pre-wrap break-all text-xs">
                 {trace.systemPrompt}
               </pre>
-            </TabsContent>
-            <TabsContent value="image">
-              {trace.image ? (
-                <FocusOverlay
-                  key={trace.imageHash}
-                  screenshot={{ data: trace.image, annotated: true }}
-                />
-              ) : (
-                <p>本次没有图片，或输入图片缓存已过期。</p>
-              )}
-              <p className="break-all text-xs text-muted-foreground">
-                输入图 SHA256：{trace.imageHash ?? "无"}
-              </p>
-            </TabsContent>
-            <TabsContent value="input">
+              <h4 className="font-medium">User · 注入后的实际内容</h4>
               <pre className="whitespace-pre-wrap break-all text-xs">
                 {trace.userPrompt}
               </pre>
-            </TabsContent>
-            <TabsContent value="steps">
-              <p className="text-xs text-muted-foreground">
-                每步消息、模型输出与工具结果；图片用原动作及哈希引用，不在这里重复展示图片字节。
-              </p>
-              <pre className="whitespace-pre-wrap break-all text-xs">
-                {JSON.stringify(
-                  {
-                    steps: trace.steps ?? [],
-                    tools: trace.tools ?? [],
-                    toolCalls: trace.toolCalls ?? [],
-                  },
-                  null,
-                  2,
-                )}
-              </pre>
-            </TabsContent>
-          </Tabs>
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            完整追踪暂不可用或已过期，已保存的理解摘要不受影响。
-          </p>
-        )}
-      </DetailDisclosure>
+            </div>
+          ) : (
+            <p>尚无模型请求，或追踪已过期。</p>
+          )}
+        </TabsContent>
+        <TabsContent value="trace">
+          {trace ? (
+            <UnderstandingChain key={id} trace={trace} />
+          ) : (
+            <p className="text-sm">尚无 Agent Trace。</p>
+          )}
+          <DetailDisclosure title="采集诊断与原始记录">
+            {panels?.diagnostics ?? "暂无采集诊断"}
+          </DetailDisclosure>
+        </TabsContent>
+        <TabsContent value="ax">
+          <DetailDisclosure key={id} title="展开 AX 树结构">
+            {panels?.ax ?? "暂无 AX 数据"}
+          </DetailDisclosure>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

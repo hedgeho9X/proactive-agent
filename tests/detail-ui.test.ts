@@ -20,8 +20,11 @@ test("理解摘要无需等追踪文件加载，且排在记录操作上方", ()
   );
   expect(html.indexOf("点击 Open")).toBeLessThan(html.indexOf("复制 ID"));
   expect(html).toContain("当前选中测试项目。");
-  expect(html).toContain('aria-expanded="false"');
-  expect(html).not.toContain("中文 Prompt");
+  expect(html).toContain("原始输入 Prompt");
+  expect(html).toContain("观测");
+  expect(html).toContain("AX 树");
+  expect(html).not.toContain("查看 AI 请求详情");
+  expect(html).not.toContain("筛选 AX 节点");
 });
 
 test("等待和失败状态始终可见", () => {
