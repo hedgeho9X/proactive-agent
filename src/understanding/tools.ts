@@ -93,8 +93,8 @@ export function createUnderstandingTools(
                   text: JSON.stringify({ ...output, image: undefined }),
                 },
                 {
-                  type: "file-data",
-                  data: output.image,
+                  type: "file",
+                  data: { type: "data", data: output.image },
                   mediaType: "image/png",
                 },
               ],
@@ -110,6 +110,7 @@ export function createUnderstandingTools(
       app: { type: "string", maxLength: 200 },
       window_id: { type: "integer" },
       since: { type: "string", format: "date-time" },
+      before: { type: "string", format: "date-time" },
     },
     [],
     (args) => session.list(args),

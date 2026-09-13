@@ -1,4 +1,4 @@
-/** 单次屏幕事实理解、证据缓存和追踪；不维护主 Agent 历史或执行工具。 */
+/** 屏幕事实理解与有限只读取证循环；不维护主 Agent 会话或执行业务工具。 */
 import {
   generateText,
   Output,
@@ -220,7 +220,7 @@ export class UnderstandingService {
       this.active.delete(hash);
     }
   }
-  /** 发起一次无工具模型请求，并保存可按 Action ID 查询的输入与输出。 */
+  /** 运行单次理解，可按需补证，并保存按 Action ID 查询的模型步骤。 */
   private async run(
     input: UnderstandingInput,
     config: ModelConfig,
@@ -262,7 +262,13 @@ export class UnderstandingService {
     debug.tools = tools ? Object.keys(tools) : [];
     debug.toolCalls = toolTraces;
     debug.steps = [];
-    if (context) debug.requestSettings.maxSteps = 4;
+    if (context)
+      Object.assign(debug.requestSettings, {
+        maxSteps: 4,
+        maxToolCalls: 8,
+        maxImages: 2,
+        timeoutMs: 60000,
+      });
     await mkdir(this.cacheDir, { recursive: true });
     if (debug.imageFile)
       await writeFile(
@@ -294,7 +300,7 @@ export class UnderstandingService {
               };
             }
           : undefined,
-        onStepFinish: context
+        onStepEnd: context
           ? async (step) => {
               const current = debug.steps.at(-1);
               Object.assign(current, {

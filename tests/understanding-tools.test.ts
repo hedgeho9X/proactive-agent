@@ -34,8 +34,8 @@ test("工具拒绝未来ID、限制图片次数并输出真实图片内容块", 
   );
   const modelOutput = tools.get_action_image.toModelOutput({ output });
   expect(modelOutput.value[1]).toMatchObject({
-    type: "file-data",
-    data: "aW1hZ2U=",
+    type: "file",
+    data: { type: "data", data: "aW1hZ2U=" },
     mediaType: "image/png",
   });
   await tools.get_action_image.execute({ action_id: "now" }, options);

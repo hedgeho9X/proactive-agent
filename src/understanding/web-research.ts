@@ -1,8 +1,10 @@
 /** Tavily 搜索和正文提取服务；不直接访问目标网页，不返回鉴权或原始错误正文。 */
 import { isIP, BlockList } from "node:net";
 import { lookup } from "node:dns/promises";
+import { createHash } from "node:crypto";
 
 const blocked = new BlockList();
+const blockedV6 = new BlockList();
 for (const [ip, prefix] of [
   ["0.0.0.0", 8],
   ["10.0.0.0", 8],
@@ -21,7 +23,7 @@ for (const [ip, prefix] of [
   ["fc00::", 7],
   ["fe80::", 10],
 ] as const)
-  blocked.addSubnet(ip, prefix, "ipv6");
+  blockedV6.addSubnet(ip, prefix, "ipv6");
 
 /** 拒绝带凭证、非 HTTPS、本机及内网 URL，再交给外部提取服务。 */
 export async function validatePublicUrl(value: string) {
@@ -42,7 +44,9 @@ export async function validatePublicUrl(value: string) {
   if (
     !addresses.length ||
     addresses.some((item) =>
-      blocked.check(item.address, item.family === 6 ? "ipv6" : "ipv4"),
+      item.family === 6
+        ? blockedV6.check(item.address, "ipv6")
+        : blocked.check(item.address, "ipv4"),
     )
   )
     throw new Error("web_url_not_public");
@@ -120,7 +124,10 @@ export class WebResearch {
       results: (result.results ?? [])
         .slice(0, 5)
         .map((item: any, index: number) => ({
-          source_id: `search-${index + 1}`,
+          source_id: createHash("sha256")
+            .update(String(item.url ?? index))
+            .digest("hex")
+            .slice(0, 16),
           title: String(item.title ?? "").slice(0, 300),
           url: item.url,
           content: String(item.content ?? "").slice(0, 1200),
@@ -145,6 +152,7 @@ export class WebResearch {
       throw new Error("web_extract_failed");
     return {
       url: target,
+      source_id: createHash("sha256").update(target).digest("hex").slice(0, 16),
       source_url: item.url,
       retrieved_at: new Date().toISOString(),
       content: item.raw_content.slice(0, 8000),

@@ -74,19 +74,22 @@ export class EvidenceSession {
     app,
     window_id,
     since,
+    before,
   }: {
     limit?: number;
     offset?: number;
     app?: string;
     window_id?: number;
     since?: string;
+    before?: string;
   } = {}) {
     const rows = this.rows.filter(
       (row) =>
         row.id !== this.anchor.id &&
         (!app || row.app.bundle_id === app) &&
         (window_id === undefined || row.window_id === window_id) &&
-        (!since || Date.parse(row.time) >= Date.parse(since)),
+        (!since || Date.parse(row.time) >= Date.parse(since)) &&
+        (!before || Date.parse(row.time) <= Date.parse(before)),
     );
     const count = Math.max(1, Math.min(50, Math.trunc(limit))),
       start = Math.max(0, Math.trunc(offset));

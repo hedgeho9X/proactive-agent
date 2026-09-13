@@ -50,3 +50,20 @@ test("HTTP 错误脱敏，拒绝本机和内网URL", async () => {
   ])
     await expect(validatePublicUrl(url)).rejects.toThrow();
 });
+
+test("网页提取传递 focus 并标记正文截断，不读取整页进入上下文", async () => {
+  const web = new WebResearch(() => "fixture", (async (url: any, init: any) => {
+    expect(url).toBe("https://api.tavily.com/extract");
+    expect(JSON.parse(init.body)).toMatchObject({
+      query: "核心方法",
+      chunks_per_source: 3,
+      urls: ["https://8.8.8.8/"],
+    });
+    return Response.json({
+      results: [{ url: "https://8.8.8.8/", raw_content: "x".repeat(9000) }],
+    });
+  }) as any);
+  const result = await web.extract("https://8.8.8.8", "核心方法");
+  expect(result.content).toHaveLength(8000);
+  expect(result.truncated).toBe(true);
+});

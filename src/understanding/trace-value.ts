@@ -4,6 +4,23 @@ import { createHash } from "node:crypto";
 /** 保留消息文本和工具参数，二进制及图片字段用摘要替代。 */
 export function traceValue(value: any, key = ""): any {
   if (
+    value &&
+    typeof value === "object" &&
+    typeof value.mediaType === "string" &&
+    value.mediaType.startsWith("image/") &&
+    value.data !== undefined
+  ) {
+    const data =
+      typeof value.data === "object" && value.data?.type === "data"
+        ? value.data.data
+        : value.data;
+    return {
+      type: value.type,
+      mediaType: value.mediaType,
+      data: traceValue(data, "image"),
+    };
+  }
+  if (
     value instanceof Uint8Array ||
     (typeof value === "string" &&
       (key === "image" || value.startsWith("data:image/")))

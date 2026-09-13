@@ -24,6 +24,14 @@ test("理解 Agent 先读历史详情再生成信息充分的标题，工具结�
               content: null,
               tool_calls: [
                 {
+                  id: "call-image",
+                  type: "function",
+                  function: {
+                    name: "get_action_image",
+                    arguments: '{"action_id":"prior"}',
+                  },
+                },
+                {
                   id: "call-detail",
                   type: "function",
                   function: {
@@ -66,7 +74,15 @@ test("理解 Agent 先读历史详情再生成信息充分的标题，工具结�
         title: "打开论文A",
       },
     ],
-    read: async () => ({ action: {}, evidence: [], artifacts: {} }),
+    read: async () => ({
+      action: {},
+      evidence: [],
+      artifacts: {
+        screenshot: {
+          bytes: Buffer.from("historical-image").toString("base64"),
+        },
+      },
+    }),
     result: () => ({ result: { action_detail: "论文A：基于任务的记忆检索" } }),
   };
   const service = new UnderstandingService(root, () => {}, {
@@ -101,13 +117,95 @@ test("理解 Agent 先读历史详情再生成信息充分的标题，工具结�
     expect(JSON.stringify(requests[1].messages)).toContain(
       "基于任务的记忆检索",
     );
+    expect(JSON.stringify(requests[1].messages)).toContain(
+      Buffer.from("historical-image").toString("base64"),
+    );
     expect(result.result.action_title).toBe("查看论文A的记忆检索方法");
     expect(result.usage.totalTokens).toBe(60);
     const trace = await service.trace("current");
     expect(trace.steps).toHaveLength(2);
-    expect(trace.toolCalls[0].name).toBe("get_action_detail");
+    expect(
+      trace.toolCalls.some((call: any) => call.name === "get_action_detail"),
+    ).toBe(true);
     expect(trace.userPrompt).toBe(result.manifest.userPrompt);
     expect(JSON.stringify(trace.steps)).not.toContain("fixture-secret");
+    expect(JSON.stringify(trace.steps)).not.toContain(
+      Buffer.from("historical-image").toString("base64"),
+    );
+  } finally {
+    await service.close();
+    server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("连续补证到第四步时禁止工具并收敛输出", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentic-budget-"));
+  const requests: any[] = [];
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const body = (await request.json()) as any;
+      requests.push(body);
+      const done = body.tool_choice === "none";
+      return Response.json({
+        choices: [
+          {
+            index: 0,
+            finish_reason: done ? "stop" : "tool_calls",
+            message: done
+              ? {
+                  role: "assistant",
+                  content: JSON.stringify({
+                    action_title: "查看论文方法",
+                    action_detail: "已获取本次可用证据。",
+                  }),
+                }
+              : {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "call-" + requests.length,
+                      type: "function",
+                      function: { name: "list_actions", arguments: "{}" },
+                    },
+                  ],
+                },
+          },
+        ],
+      });
+    },
+  });
+  const anchor = { id: "now", time: new Date(1000).toISOString(), app: {} };
+  const source = {
+    list: async () => [],
+    read: async () => ({}),
+    result: () => null,
+  };
+  const service = new UnderstandingService(root, () => {}, {
+    createSession: () => EvidenceSession.create(source, anchor),
+  });
+  try {
+    const result: any = await service.summarize(
+      {
+        action: { action_id: "now", occurred_at: anchor.time },
+        revision: 1,
+        evidence: [],
+        artifacts: { screenshot: { bytes: "aW1hZ2U=" } },
+        view: "raw",
+      },
+      {
+        protocol: "openai-compatible",
+        model: "fixture",
+        apiKey: "fixture",
+        baseUrl: `http://127.0.0.1:${server.port}`,
+      },
+    );
+    expect(requests).toHaveLength(4);
+    expect(requests[3].tool_choice).toBe("none");
+    expect(result.debug.steps).toHaveLength(4);
+    expect(result.result.action_title).toBe("查看论文方法");
   } finally {
     await service.close();
     server.stop(true);
