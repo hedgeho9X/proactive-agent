@@ -37,7 +37,8 @@ test("历史按时间及同采集会话序号限定，未知未来 ID 无法取�
     session.initial().length,
   );
   await expect(session.get("21", "detail")).rejects.toThrow("boundary");
-  expect((await session.get("19", "detail")).content).toContain("细节");
+  const detail = await session.get("19", "detail");
+  expect("content" in detail ? detail.content : "").toContain("细节");
   expect(reads).toBe(1);
 });
 

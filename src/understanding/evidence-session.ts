@@ -176,7 +176,9 @@ export class EvidenceSession {
       status: "available",
       action_id: id,
       image,
-      image_kind: "captured_original",
+      image_kind: item.artifacts.screenshot.payload?.content?.annotated
+        ? "annotated_current"
+        : "captured_original",
       captured_at: item.artifacts.screenshot.captured,
     };
   }
