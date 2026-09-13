@@ -1,5 +1,7 @@
+/** 按动作到达顺序保留序位；采集和理解并发，投递等待前序动作进入终态。 */
 import { DatabaseSync } from "node:sqlite";
 export type QueueStatus =
+  | "capturing"
   | "queued"
   | "understanding"
   | "ready"
@@ -50,6 +52,11 @@ export class ActionQueue {
   enqueue(actionId: string, reason?: string) {
     this.db
       .prepare(
+        "UPDATE queue SET status=?,reason=? WHERE actionId=? AND status='capturing'",
+      )
+      .run(reason ? "filtered" : "queued", reason ?? null, actionId);
+    this.db
+      .prepare(
         "INSERT OR IGNORE INTO queue(actionId,status,reason,createdAt) VALUES(?,?,?,?)",
       )
       .run(
@@ -58,7 +65,28 @@ export class ActionQueue {
         reason ?? null,
         Date.now(),
       );
-    if (!this.summaries.has(actionId)) this.refreshSummary(actionId);
+    this.refreshSummary(actionId);
+    this.handlers.change();
+    void this.drain();
+  }
+  /** 同步占位必须发生在采集异步工作之前，不读取图片或调用模型。 */
+  reserve(actionId: string) {
+    this.db
+      .prepare(
+        "INSERT OR IGNORE INTO queue(actionId,status,createdAt) VALUES(?,'capturing',?)",
+      )
+      .run(actionId, Date.now());
+    this.refreshSummary(actionId);
+    this.handlers.change();
+  }
+  /** 释放没有进入理解的采集序位，防止失败动作永久阻塞后续投递。 */
+  finishCapture(actionId: string) {
+    this.db
+      .prepare(
+        "UPDATE queue SET status='filtered',reason='capture_not_routed' WHERE actionId=? AND status='capturing'",
+      )
+      .run(actionId);
+    this.refreshSummary(actionId);
     this.handlers.change();
     void this.drain();
   }
@@ -93,6 +121,26 @@ export class ActionQueue {
       .prepare("SELECT result FROM queue WHERE actionId=?")
       .get(id) as any;
     return row?.result ? JSON.parse(row.result) : null;
+  }
+  /** 按需返回投递序位与阻塞动作，不将完整理解结果放入高频状态列表。 */
+  deliveryTrace(id: string) {
+    const row = this.summaries.get(id);
+    if (!row) return null;
+    const blocker = this.db
+      .prepare(
+        "SELECT actionId,status FROM queue WHERE seq<? AND status IN ('capturing','queued','understanding') ORDER BY seq LIMIT 1",
+      )
+      .get(row.seq);
+    return {
+      sequence: row.seq,
+      status: row.status,
+      reason: row.reason,
+      admittedAt: row.createdAt,
+      waitingFor: ["ready", "queued", "understanding"].includes(row.status)
+        ? (blocker ?? null)
+        : null,
+      receipt: this.result(id)?.delivery ?? null,
+    };
   }
   retry(id: string) {
     this.db
@@ -168,12 +216,22 @@ export class ActionQueue {
         return;
       }
       if (selected.length) {
+        const startedAt = new Date().toISOString();
+        let receipt: unknown;
         if (this.handlers.deliverBatch)
-          await this.handlers.deliverBatch(selected);
+          receipt = await this.handlers.deliverBatch(selected);
         else
           for (const row of selected)
             await this.handlers.deliver(row.actionId, row.result);
-        for (const row of selected) this.set(row.actionId, "delivered");
+        for (const row of selected)
+          this.set(row.actionId, "delivered", null, {
+            ...row.result,
+            delivery: {
+              startedAt,
+              completedAt: new Date().toISOString(),
+              receipt,
+            },
+          });
       }
     } catch (error) {
       for (const row of selected.length ? selected : rows)
@@ -192,6 +250,13 @@ export class ActionQueue {
     let delivery: Promise<void> | undefined;
     try {
       while (!this.stopped) {
+        this.db
+          .prepare(
+            "UPDATE queue SET status='filtered',reason='capture_wait_timeout' WHERE status='capturing' AND createdAt<?",
+          )
+          .run(Date.now() - 30000);
+        for (const row of this.summaries.values())
+          if (row.status === "capturing") this.refreshSummary(row.actionId);
         const concurrency = Math.max(
           1,
           Math.min(20, this.handlers.concurrency?.() ?? 1),
@@ -216,9 +281,7 @@ export class ActionQueue {
           // 按采集入队顺序投递；不能让快完成的后一帧越过仍在理解的前一帧。
           const pending = this.db
             .prepare(
-              this.handlers.deliverBatch
-                ? "SELECT seq,actionId,status FROM queue WHERE status IN ('queued','understanding','ready') ORDER BY seq LIMIT 20"
-                : "SELECT seq,actionId,status FROM queue WHERE status='ready' ORDER BY seq LIMIT 20",
+              "SELECT seq,actionId,status FROM queue WHERE status IN ('capturing','queued','understanding','ready') ORDER BY seq LIMIT 20",
             )
             .all() as any[];
           const barrier = pending.findIndex((row) => row.status !== "ready");

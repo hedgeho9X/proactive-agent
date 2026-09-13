@@ -502,6 +502,12 @@ async function bootstrap() {
         queue.enqueue(id);
       },
       3,
+      {
+        admitted: (event) => {
+          if (matchesRouting(event, routing.get())) queue.reserve(event.id);
+        },
+        settled: (event) => queue.finishCapture(event.id),
+      },
     );
     store = new EvidenceStore(
       join(app.getPath("userData"), "observations.sqlite"),
@@ -671,6 +677,7 @@ async function bootstrap() {
           });
           await runtime!.request("idle");
           mainIdle = true;
+          return { batchId, actionIds: items.map((item) => item.actionId) };
         },
       },
     );
@@ -881,8 +888,12 @@ async function bootstrap() {
         return axHistory.list();
       case "ax.analysis":
         return queue.result(String(p.id));
-      case "ai.trace":
-        return understanding.trace(String(p.id));
+      case "ai.trace": {
+        const trace = await understanding.trace(String(p.id));
+        return trace
+          ? { ...trace, delivery: queue.deliveryTrace(String(p.id)) }
+          : null;
+      }
       case "prompts.update":
         await prompts.update(p.role as PromptRole, p.value);
         if (p.role !== "understanding" && runtime)

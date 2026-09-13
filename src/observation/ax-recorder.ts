@@ -20,6 +20,10 @@ export class AXRecorder {
     private changed: () => void,
     private completed?: (snapshot: any) => Promise<void>,
     private maxConcurrent = 1,
+    private lifecycle?: {
+      admitted: (event: any) => void;
+      settled: (event: any) => void;
+    },
   ) {}
   status() {
     return {
@@ -51,6 +55,7 @@ export class AXRecorder {
     const captures = ["click", "key_down"].includes(event.kind);
     // 防御旧监听协议，松开及修饰键不再生成空快照记录。
     if (!captures) return;
+    this.lifecycle?.admitted(event);
     const captureStatus =
       this.capturing >= this.maxConcurrent ? "skipped_busy" : "pending";
     if (captureStatus === "pending") this.capturing++;
@@ -144,6 +149,7 @@ export class AXRecorder {
       this.changed();
     } finally {
       if (captureStatus === "pending") this.capturing--;
+      this.lifecycle?.settled(event);
     }
   }
   async start(scope?: { allApps: boolean; allowedBundleIds: string[] }) {
