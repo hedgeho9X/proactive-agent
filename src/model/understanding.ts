@@ -21,7 +21,7 @@ import { agenticInstructions } from "../../prompts/agentic-understanding.ts";
 import { xmlData } from "../../prompts/xml.ts";
 import { understandingModel } from "./understanding-provider.ts";
 import { createHash } from "node:crypto";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
 import { join } from "node:path";
 import {
   validateJsonSchemaValue,
@@ -171,6 +171,7 @@ export class UnderstandingService {
     await Promise.allSettled([...this.active.values()]);
   }
   private active = new Map<string, Promise<unknown>>();
+  private traceWrites = new Map<string, Promise<void>>();
 
   /** cacheDir 为本应用私有目录；emit 只发布轻量状态。 */
   constructor(
@@ -257,7 +258,12 @@ export class UnderstandingService {
     };
     const toolTraces: UnderstandingToolTrace[] = [];
     const tools = context
-      ? createUnderstandingTools(context, this.capabilities?.web, toolTraces)
+      ? createUnderstandingTools(
+          context,
+          this.capabilities?.web,
+          toolTraces,
+          () => this.saveTrace(String(input.action.action_id), debug),
+        )
       : undefined;
     debug.tools = tools ? Object.keys(tools) : [];
     debug.toolCalls = toolTraces;
@@ -289,11 +295,14 @@ export class UnderstandingService {
         tools,
         stopWhen: isStepCount(context ? 4 : 1),
         prepareStep: context
-          ? ({ stepNumber, messages }) => {
+          ? async ({ stepNumber, messages }) => {
               debug.steps.push({
                 step: stepNumber + 1,
+                startedAt: new Date().toISOString(),
+                status: "running",
                 messages: traceValue(messages),
               });
+              await this.saveTrace(String(input.action.action_id), debug);
               return {
                 toolChoice:
                   stepNumber >= 3 ? ("none" as const) : ("auto" as const),
@@ -304,6 +313,8 @@ export class UnderstandingService {
           ? async (step) => {
               const current = debug.steps.at(-1);
               Object.assign(current, {
+                status: "completed",
+                elapsedMs: Date.now() - Date.parse(current.startedAt),
                 text: step.text,
                 finishReason: step.finishReason,
                 usage: step.usage,
@@ -414,6 +425,12 @@ export class UnderstandingService {
       });
       return record;
     } catch (error) {
+      const pendingStep = debug.steps.at(-1);
+      if (pendingStep?.status === "running")
+        Object.assign(pendingStep, {
+          status: "failed",
+          elapsedMs: Date.now() - Date.parse(pendingStep.startedAt),
+        });
       if (NoObjectGeneratedError.isInstance(error)) {
         debug.rawOutput = error.text?.slice(0, 64000);
         debug.finishReason = error.finishReason;
@@ -455,8 +472,21 @@ export class UnderstandingService {
   }
   /** 保存私有追踪文件，不通过状态事件传输完整输入。 */
   private async saveTrace(id: string, debug: unknown) {
-    await mkdir(this.cacheDir, { recursive: true });
-    await writeFile(this.traceFile(id), JSON.stringify(debug), { mode: 0o600 });
+    const data = JSON.stringify(debug);
+    const work = (this.traceWrites.get(id) ?? Promise.resolve())
+      .catch(() => {})
+      .then(async () => {
+        await mkdir(this.cacheDir, { recursive: true });
+        const file = this.traceFile(id);
+        await writeFile(file + ".tmp", data, { mode: 0o600 });
+        await rename(file + ".tmp", file);
+      });
+    this.traceWrites.set(id, work);
+    try {
+      await work;
+    } finally {
+      if (this.traceWrites.get(id) === work) this.traceWrites.delete(id);
+    }
   }
   /** 按需读取一次理解的完整追踪与图片，图片过期时返回空值。 */
   async trace(id: string) {

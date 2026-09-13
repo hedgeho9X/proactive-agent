@@ -19,8 +19,15 @@ import { AITrace } from "../src/renderer/ai-trace.tsx";
       steps: [
         {
           step: 1,
+          status: "completed",
+          elapsedMs: 240,
+          usage: { inputTokens: 950, outputTokens: 32 },
           toolCalls: [
-            { toolName: "get_action_detail", input: { action_id: "prior" } },
+            {
+              toolCallId: "call-1",
+              toolName: "get_action_detail",
+              input: { action_id: "prior" },
+            },
           ],
         },
         { step: 2, text: "完成理解" },
@@ -28,6 +35,8 @@ import { AITrace } from "../src/renderer/ai-trace.tsx";
       toolCalls: [
         {
           name: "get_action_detail",
+          toolCallId: "call-1",
+          status: "completed",
           input: { action_id: "prior" },
           elapsedMs: 2,
           result: { content: "论文A" },
@@ -41,7 +50,7 @@ import { AITrace } from "../src/renderer/ai-trace.tsx";
 function Preview() {
   const [hasKey, setHasKey] = useState(false);
   return (
-    <main className="mx-auto flex max-w-xl flex-col gap-8 p-6">
+    <main className="mx-auto flex max-w-5xl flex-col gap-8 p-6">
       <h1>Agentic Understanding · 合成验收</h1>
       <SearchSettings
         hasKey={hasKey}

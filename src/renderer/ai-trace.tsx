@@ -4,6 +4,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { DetailDisclosure } from "./detail-disclosure.tsx";
 import { FocusOverlay } from "./focus-overlay.tsx";
+import { UnderstandingChain } from "./understanding-chain.tsx";
 /** 加载单条理解追踪，历史追踪过期时仍展示持久化摘要。 */
 export function AITrace({
   id,
@@ -39,7 +40,13 @@ export function AITrace({
         });
     };
     void load();
-    const timer = ["queued", "understanding"].includes(status ?? "")
+    const timer = [
+      "capturing",
+      "queued",
+      "understanding",
+      "ready",
+      "delivering",
+    ].includes(status ?? "")
       ? setInterval(() => void load(), 1000)
       : null;
     return () => {
@@ -95,14 +102,18 @@ export function AITrace({
           {reason} {error}
         </p>
         {trace ? (
-          <Tabs defaultValue="output">
+          <Tabs defaultValue="chain">
             <TabsList variant="line">
+              <TabsTrigger value="chain">调用链</TabsTrigger>
               <TabsTrigger value="output">输出</TabsTrigger>
               <TabsTrigger value="prompt">中文 Prompt</TabsTrigger>
               <TabsTrigger value="image">AI 看到的图片</TabsTrigger>
               <TabsTrigger value="input">完整输入</TabsTrigger>
               <TabsTrigger value="steps">模型步骤</TabsTrigger>
             </TabsList>
+            <TabsContent value="chain">
+              <UnderstandingChain key={id} trace={trace} />
+            </TabsContent>
             <TabsContent value="output" className="flex flex-col gap-3">
               <details>
                 <summary>模型原始输出</summary>

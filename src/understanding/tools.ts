@@ -8,6 +8,9 @@ import { understandingToolDescriptions as descriptions } from "../../prompts/age
 
 /** 每次工具调用的独立追踪，图片以原始动作和哈希索引，不重复存储大字符串。 */
 export interface UnderstandingToolTrace {
+  toolCallId?: string;
+  startedAt?: string;
+  status?: "running" | "completed" | "failed";
   name: string;
   input: unknown;
   result?: unknown;
@@ -20,6 +23,7 @@ export function createUnderstandingTools(
   session: EvidenceSession,
   web: WebResearch | undefined,
   traces: UnderstandingToolTrace[],
+  changed?: () => Promise<void>,
 ): ToolSet {
   let calls = 0,
     images = 0;
@@ -46,6 +50,16 @@ export function createUnderstandingTools(
       }),
       execute: async (args, options) => {
         const start = Date.now();
+        const trace: UnderstandingToolTrace = {
+          name,
+          input: args,
+          toolCallId: options.toolCallId,
+          startedAt: new Date(start).toISOString(),
+          status: "running",
+          elapsedMs: 0,
+        };
+        traces.push(trace);
+        await changed?.();
         try {
           if (++calls > 8)
             throw new Error("understanding_tool_budget_exhausted");
@@ -53,7 +67,8 @@ export function createUnderstandingTools(
             throw new Error("understanding_image_budget_exhausted");
           options.abortSignal?.throwIfAborted();
           const result = await execute(args, options.abortSignal);
-          traces.push({
+          Object.assign(trace, {
+            status: "completed",
             name,
             input: args,
             result: result?.image
@@ -74,13 +89,16 @@ export function createUnderstandingTools(
             /^(action_|web_|understanding_)/.test(error.message)
               ? error.message
               : "evidence_tool_failed";
-          traces.push({
+          Object.assign(trace, {
+            status: "failed",
             name,
             input: args,
             error: code,
             elapsedMs: Date.now() - start,
           });
           return { status: "error", reason: code };
+        } finally {
+          await changed?.();
         }
       },
       toModelOutput: ({ output }: any) =>
