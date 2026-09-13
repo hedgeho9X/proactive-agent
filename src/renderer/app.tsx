@@ -967,6 +967,10 @@ function App() {
                 <AXRecordDetails
                   key={currentRow.id}
                   recordId={currentRow.id}
+                  summary={{
+                    action_title: currentRow.detail.actionTitle,
+                    action_detail: currentRow.detail.actionDetail,
+                  }}
                   status={currentRow.detail.axRecord.captureStatus}
                   aiStatus={queue.get(currentRow.id)?.status}
                   aiReason={queue.get(currentRow.id)?.reason}
