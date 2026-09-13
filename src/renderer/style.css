@@ -85,6 +85,9 @@
 .event-row[data-selected="true"] {
   background: var(--accent);
 }
+.event-row[data-understood="true"] {
+  height: 66px;
+}
 .event-row[data-tone="observation"] .event-kind {
   color: var(--observation);
 }

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AXRecordDetails } from "./ax-record-details.tsx";
+import { UnderstandingText, understandingCost } from "./understanding-row.tsx";
 import { PromptSettings } from "./prompt-settings.tsx";
 import { SearchSettings } from "./search-settings.tsx";
 import { FocusOverlay } from "./focus-overlay.tsx";
@@ -596,6 +597,11 @@ function App() {
         ...row.detail,
         actionTitle,
         actionDetail: item?.actionDetail,
+        usageSummary: {
+          elapsedMs: item?.elapsedMs,
+          totalTokens: item?.totalTokens,
+          costUSD: item?.costUSD,
+        },
       },
     };
   });
@@ -686,14 +692,28 @@ function App() {
           <Icon />
           <span className="truncate">{row.label}</span>
         </span>
-        <span className="event-summary truncate">{row.text || "—"}</span>
+        {row.detail?.actionTitle ? (
+          <UnderstandingText
+            title={row.detail.actionTitle}
+            detail={row.detail.actionDetail}
+          />
+        ) : (
+          <span className="event-summary truncate">{row.text || "—"}</span>
+        )}
         {["understanding", "delivering"].includes(row.status ?? "") && (
           <LoaderCircle className="size-4 animate-spin" aria-label="处理中" />
         )}
         {row.fixture && <Badge variant="outline">合成</Badge>}
-        <Badge variant={row.status === "failed" ? "destructive" : "ghost"}>
-          {statusText(row.status)}
-        </Badge>
+        <span className="flex shrink-0 flex-col items-end gap-1">
+          <Badge variant={row.status === "failed" ? "destructive" : "ghost"}>
+            {statusText(row.status)}
+          </Badge>
+          {row.detail?.actionTitle && (
+            <span className="text-[10px] text-muted-foreground">
+              {understandingCost(row.detail.usageSummary ?? {})}
+            </span>
+          )}
+        </span>
       </>
     );
     if (row.kind === "subagent")
@@ -733,6 +753,7 @@ function App() {
         data-selected={selected?.id === row.id}
         data-child={child}
         data-action-id={row.id}
+        data-understood={!!row.detail?.actionTitle}
         onClick={() => select(row)}
       >
         {content}

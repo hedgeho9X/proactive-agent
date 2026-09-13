@@ -44,7 +44,7 @@ export class ActionQueue {
     // 只在打开数据库时投影一次旧结果，之后由写入路径逐条更新摘要。
     for (const row of this.db
       .prepare(
-        "SELECT seq,actionId,status,reason,attempts,createdAt,json_extract(result,'$.result.action_title') AS actionTitle,json_extract(result,'$.result.action_detail') AS actionDetail,json_extract(result,'$.debug.imageFile') AS inputImageFile FROM queue ORDER BY seq",
+        "SELECT seq,actionId,status,reason,attempts,createdAt,json_extract(result,'$.result.action_title') AS actionTitle,json_extract(result,'$.result.action_detail') AS actionDetail,json_extract(result,'$.debug.imageFile') AS inputImageFile,json_extract(result,'$.debug.elapsedMs') AS elapsedMs,json_extract(result,'$.usage.totalTokens') AS totalTokens,json_extract(result,'$.usage.costUSD') AS costUSD FROM queue ORDER BY seq",
       )
       .all() as any[])
       this.summaries.set(row.actionId, row);
@@ -111,6 +111,9 @@ export class ActionQueue {
             actionTitle: result?.result?.action_title ?? null,
             actionDetail: result?.result?.action_detail ?? null,
             inputImageFile: result?.debug?.imageFile ?? null,
+            elapsedMs: result?.debug?.elapsedMs ?? null,
+            totalTokens: result?.usage?.totalTokens ?? null,
+            costUSD: result?.usage?.costUSD ?? null,
           }
         : {}),
     });
