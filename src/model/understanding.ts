@@ -5,7 +5,20 @@ import {
   jsonSchema,
   NoObjectGeneratedError,
   APICallError,
+  isStepCount,
 } from "ai";
+import {
+  EvidenceSession,
+  type EvidenceRow,
+} from "../understanding/evidence-session.ts";
+import { WebResearch } from "../understanding/web-research.ts";
+import {
+  createUnderstandingTools,
+  type UnderstandingToolTrace,
+} from "../understanding/tools.ts";
+import { traceValue } from "../understanding/trace-value.ts";
+import { agenticInstructions } from "../../prompts/agentic-understanding.ts";
+import { xmlData } from "../../prompts/xml.ts";
 import { understandingModel } from "./understanding-provider.ts";
 import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
@@ -35,6 +48,15 @@ function promptVariables(input: UnderstandingInput) {
     view: input.view,
   };
 }
+/** 将实际历史快照附加到请求正文，缓存与追踪使用相同渲染结果。 */
+function understandingPrompt(input: UnderstandingInput): string {
+  return (
+    buildUserPrompt(promptVariables(input)) +
+    (input.history
+      ? `\n<history_titles>\n${xmlData(input.history)}\n</history_titles>`
+      : "")
+  );
+}
 /** 单次动作及其关联证据；view 决定传入模型的 AX 视图。 */
 export interface UnderstandingInput {
   action: Record<string, unknown>;
@@ -42,6 +64,7 @@ export interface UnderstandingInput {
   evidence: unknown[];
   artifacts: Record<string, any>;
   view: "raw" | "context";
+  history?: EvidenceRow[];
 }
 /** 供 provider 请求和本地校验共用的动作描述输出契约。 */
 export const understandingSchema: ToolDefinition["output"]["schema"] = {
@@ -125,7 +148,7 @@ export function inputManifest(
     schema: "understanding-v4-role-template",
     prompt_version: 3,
     prompt,
-    userPrompt: buildUserPrompt(promptVariables(input)),
+    userPrompt: understandingPrompt(input),
     model,
     ...input,
     artifacts,
@@ -153,6 +176,10 @@ export class UnderstandingService {
   constructor(
     private cacheDir: string,
     private emit: (event: Record<string, unknown>) => void,
+    private capabilities?: {
+      createSession: (input: UnderstandingInput) => Promise<EvidenceSession>;
+      web?: WebResearch;
+    },
   ) {}
   /** 从缓存或 AI SDK 获取结构化描述，必须存在截图。 */
   async summarize(
@@ -163,6 +190,9 @@ export class UnderstandingService {
     if (!input.artifacts.screenshot?.bytes)
       throw new Error("screenshot_required");
     input = projectUnderstanding(input);
+    const context = await this.capabilities?.createSession(input);
+    if (context) input = { ...input, history: context.initial() };
+    if (context) prompt = `${prompt}\n\n${agenticInstructions}`;
     const { manifest, hash } = inputManifest(
       input,
       JSON.stringify({
@@ -172,15 +202,17 @@ export class UnderstandingService {
       }),
       prompt,
     );
-    const cached = await readFile(join(this.cacheDir, hash + ".json"), "utf8")
-      .then(JSON.parse)
-      .catch(() => null);
+    const cached = context
+      ? null
+      : await readFile(join(this.cacheDir, hash + ".json"), "utf8")
+          .then(JSON.parse)
+          .catch(() => null);
     if (cached) {
       await this.saveTrace(String(input.action.action_id), cached.debug);
       return { ...cached, cached: true };
     }
     if (this.active.has(hash)) return this.active.get(hash)!;
-    const work = this.run(input, config, manifest, hash, prompt);
+    const work = this.run(input, config, manifest, hash, prompt, context);
     this.active.set(hash, work);
     try {
       return await work;
@@ -195,9 +227,10 @@ export class UnderstandingService {
     manifest: unknown,
     hash: string,
     prompt: string,
+    context?: EvidenceSession,
   ) {
     const promptInput = promptVariables(input);
-    const userPrompt = buildUserPrompt(promptInput);
+    const userPrompt = understandingPrompt(input);
     const screenshot = input.artifacts.screenshot;
     const began = Date.now();
     const debug: any = {
@@ -222,6 +255,14 @@ export class UnderstandingService {
         ? "annotated"
         : "original_or_unavailable",
     };
+    const toolTraces: UnderstandingToolTrace[] = [];
+    const tools = context
+      ? createUnderstandingTools(context, this.capabilities?.web, toolTraces)
+      : undefined;
+    debug.tools = tools ? Object.keys(tools) : [];
+    debug.toolCalls = toolTraces;
+    debug.steps = [];
+    if (context) debug.requestSettings.maxSteps = 4;
     await mkdir(this.cacheDir, { recursive: true });
     if (debug.imageFile)
       await writeFile(
@@ -239,6 +280,33 @@ export class UnderstandingService {
       const response = await generateText({
         model: understandingModel(config),
         system: prompt,
+        tools,
+        stopWhen: isStepCount(context ? 4 : 1),
+        prepareStep: context
+          ? ({ stepNumber, messages }) => {
+              debug.steps.push({
+                step: stepNumber + 1,
+                messages: traceValue(messages),
+              });
+              return {
+                toolChoice:
+                  stepNumber >= 3 ? ("none" as const) : ("auto" as const),
+              };
+            }
+          : undefined,
+        onStepFinish: context
+          ? async (step) => {
+              const current = debug.steps.at(-1);
+              Object.assign(current, {
+                text: step.text,
+                finishReason: step.finishReason,
+                usage: step.usage,
+                toolCalls: traceValue(step.toolCalls),
+                toolResults: traceValue(step.toolResults),
+              });
+              await this.saveTrace(String(input.action.action_id), debug);
+            }
+          : undefined,
         messages: [
           {
             role: "user",
@@ -278,7 +346,7 @@ export class UnderstandingService {
         maxRetries: 0,
         abortSignal: AbortSignal.any([
           this.controller.signal,
-          AbortSignal.timeout(30000),
+          AbortSignal.timeout(context ? 60000 : 30000),
         ]),
       });
       debug.rawOutput = response.text.slice(0, 64000);
@@ -306,11 +374,11 @@ export class UnderstandingService {
         model: config.model,
         created_at: new Date().toISOString(),
         usage: usageOf({
-          promptTokenCount: response.usage.inputTokens,
+          promptTokenCount: response.totalUsage.inputTokens,
           cachedContentTokenCount:
-            response.usage.inputTokenDetails?.cacheReadTokens,
-          candidatesTokenCount: response.usage.outputTokens,
-          totalTokenCount: response.usage.totalTokens,
+            response.totalUsage.inputTokenDetails?.cacheReadTokens,
+          candidatesTokenCount: response.totalUsage.outputTokens,
+          totalTokenCount: response.totalUsage.totalTokens,
         }),
         cached: false,
         debug: {
