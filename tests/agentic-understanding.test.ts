@@ -17,6 +17,8 @@ test("理解 Agent 先读历史详情再生成信息充分的标题，工具结�
     async fetch(request) {
       const body = (await request.json()) as any;
       requests.push(body);
+      expect(body.max_tokens).toBeUndefined();
+      expect(body.max_completion_tokens).toBeUndefined();
       const content =
         requests.length === 1
           ? {

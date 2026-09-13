@@ -244,7 +244,7 @@ export class UnderstandingService {
       model: config.model,
       protocol: config.protocol ?? "gemini",
       sdk: "vercel-ai-sdk",
-      requestSettings: { maxOutputTokens: 1024, maxRetries: 0 },
+      requestSettings: { outputTokenLimit: "provider_default", maxRetries: 0 },
       startedAt: new Date(began).toISOString(),
       imageFile: screenshot?.bytes ? `${hash}.input.png` : null,
       imageHash: screenshot?.bytes
@@ -263,6 +263,7 @@ export class UnderstandingService {
           this.capabilities?.web,
           toolTraces,
           () => this.saveTrace(String(input.action.action_id), debug),
+          () => debug.steps.at(-1)?.step,
         )
       : undefined;
     debug.tools = tools ? Object.keys(tools) : [];
@@ -313,7 +314,7 @@ export class UnderstandingService {
           ? async (step) => {
               const current = debug.steps.at(-1);
               Object.assign(current, {
-                status: "completed",
+                status: step.finishReason === "length" ? "failed" : "completed",
                 elapsedMs: Date.now() - Date.parse(current.startedAt),
                 text: step.text,
                 finishReason: step.finishReason,
@@ -358,7 +359,6 @@ export class UnderstandingService {
             },
           ),
         }),
-        maxOutputTokens: 1024,
         // 队列负责显式重试；SDK 不得隐式增加计费请求次数。
         maxRetries: 0,
         abortSignal: AbortSignal.any([
@@ -368,6 +368,9 @@ export class UnderstandingService {
       });
       debug.rawOutput = response.text.slice(0, 64000);
       debug.finishReason = response.finishReason;
+      debug.usage = response.totalUsage;
+      if (response.finishReason === "length")
+        throw new Error("understanding_output_truncated");
       const result = response.output;
       if (
         validateJsonSchemaValue(understandingSchema, result).length ||
@@ -437,18 +440,20 @@ export class UnderstandingService {
       }
       const message = this.controller.signal.aborted
         ? "model_cancelled"
-        : APICallError.isInstance(error)
-          ? `understanding_http_${error.statusCode ?? "unknown"}`
-          : NoObjectGeneratedError.isInstance(error)
-            ? "invalid_understanding"
-            : error instanceof SyntaxError
-              ? "invalid_understanding_json"
-              : error instanceof Error &&
-                  error.message === "invalid_understanding"
-                ? error.message
-                : error instanceof Error && error.name === "TimeoutError"
-                  ? "understanding_request_timeout"
-                  : "understanding_request_failed";
+        : debug.finishReason === "length"
+          ? "understanding_output_truncated"
+          : APICallError.isInstance(error)
+            ? `understanding_http_${error.statusCode ?? "unknown"}`
+            : NoObjectGeneratedError.isInstance(error)
+              ? "invalid_understanding"
+              : error instanceof SyntaxError
+                ? "invalid_understanding_json"
+                : error instanceof Error &&
+                    error.message === "invalid_understanding"
+                  ? error.message
+                  : error instanceof Error && error.name === "TimeoutError"
+                    ? "understanding_request_timeout"
+                    : "understanding_request_failed";
       await this.saveTrace(String(input.action.action_id), {
         ...debug,
         status: "failed",

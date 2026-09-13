@@ -117,7 +117,7 @@ for (const protocol of ["openai-compatible", "gemini"] as const) {
       expect(trace.image).toBe(input.artifacts.screenshot.bytes);
       expect(trace.requestSettings).toEqual({
         maxRetries: 0,
-        maxOutputTokens: 1024,
+        outputTokenLimit: "provider_default",
       });
       expect(trace.finishReason).toBe("stop");
       expect(JSON.stringify(trace)).not.toContain("fixture-secret");
@@ -130,7 +130,7 @@ for (const protocol of ["openai-compatible", "gemini"] as const) {
           "data:image/png;base64," + trace.image,
         );
         expect(body.response_format.type).toBe("json_schema");
-        expect(body.max_tokens).toBe(1024);
+        expect(body.max_tokens).toBeUndefined();
       } else {
         expect(path).toBe("/v1beta/models/fixture-model:generateContent");
         expect(headers.get("x-goog-api-key")).toBe("fixture-secret");
@@ -138,7 +138,7 @@ for (const protocol of ["openai-compatible", "gemini"] as const) {
         expect(body.contents[0].parts[0].text).toBe(trace.userPrompt);
         expect(body.contents[0].parts[1].inlineData.data).toBe(trace.image);
         expect(body.generationConfig.responseMimeType).toBe("application/json");
-        expect(body.generationConfig.maxOutputTokens).toBe(1024);
+        expect(body.generationConfig?.maxOutputTokens).toBeUndefined();
       }
     } finally {
       await service.close();

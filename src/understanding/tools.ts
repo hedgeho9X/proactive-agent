@@ -8,6 +8,7 @@ import { understandingToolDescriptions as descriptions } from "../../prompts/age
 
 /** 每次工具调用的独立追踪，图片以原始动作和哈希索引，不重复存储大字符串。 */
 export interface UnderstandingToolTrace {
+  step?: number;
   toolCallId?: string;
   startedAt?: string;
   status?: "running" | "completed" | "failed";
@@ -24,6 +25,7 @@ export function createUnderstandingTools(
   web: WebResearch | undefined,
   traces: UnderstandingToolTrace[],
   changed?: () => Promise<void>,
+  currentStep?: () => number | undefined,
 ): ToolSet {
   let calls = 0,
     images = 0;
@@ -52,6 +54,7 @@ export function createUnderstandingTools(
         const start = Date.now();
         const trace: UnderstandingToolTrace = {
           name,
+          step: currentStep?.(),
           input: args,
           toolCallId: options.toolCallId,
           startedAt: new Date(start).toISOString(),
