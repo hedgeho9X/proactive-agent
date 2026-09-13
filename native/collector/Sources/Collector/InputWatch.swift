@@ -1,3 +1,4 @@
+/** 监听系统输入并在输出前排除自身操作；重型截图和 AX 遍历交由宿主调度。 */
 import AppKit
 import ApplicationServices
 
@@ -45,10 +46,13 @@ final class InputWatch {
                 if AXUIElementCopyElementAtPosition(system,Float(event.location.x),Float(event.location.y),&hit) == .success, let hit {
                     var actual: pid_t = 0
                     if AXUIElementGetPid(hit,&actual) == .success { hitTestPid = actual }
-                    if actual > 0 && actual != window.pid && actual != getppid() { targetError = "click_window_owner_ambiguous" }
+                    if actual > 0 && actual != window.pid { targetError = "click_window_owner_ambiguous" }
                 }
             }
             else { targetError = windows == nil ? "window_server_unavailable":"no_window_at_click" }
+            if isOwnClick(windows:windows ?? [],point:event.location,selected:lockedWindow,
+                          hitPid:hitTestPid,nativePid:nativePid,ownPid:getppid(),
+                          selectedIsDock:target?.bundleIdentifier == "com.apple.dock") { return }
         } else if let app = target {
             let application = AXUIElementCreateApplication(app.processIdentifier); AXUIElementSetMessagingTimeout(application,0.005)
             let focused = attribute(application,kAXFocusedWindowAttribute)

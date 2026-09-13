@@ -1,3 +1,4 @@
+/** 接收原生动作并有界调度采集；自身操作在截图、落盘和理解投递前排除。 */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AXHistory } from "./ax-history.ts";
@@ -34,6 +35,14 @@ export class AXRecorder {
       !Number.isInteger(event.pid)
     )
       throw new Error("invalid_input_event");
+    // AX 命中可以纠正 Dock 覆盖层误归属；原生目标 PID 可能滞后，不能单独作为排除依据。
+    if (
+      event.pid === process.pid ||
+      event.targetWindow?.pid === process.pid ||
+      event.targetResolution?.hitTestPid === process.pid ||
+      event.bundleId === "io.github.hedgeho9x.proactive-agent"
+    )
+      return;
     if (
       !this.scope.allApps &&
       !this.scope.allowedBundleIds.includes(event.bundleId)

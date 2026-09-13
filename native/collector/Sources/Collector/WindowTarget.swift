@@ -1,3 +1,4 @@
+/** 根据窗口几何锁定采集目标，并提供自身点击排除策略；不执行截图。 */
 import AppKit
 import ApplicationServices
 
@@ -49,6 +50,17 @@ func clickedWindow(_ windows: [CaptureWindowTarget], point: CGPoint) -> CaptureW
     guard point.x.isFinite, point.y.isFinite else { return nil }
     guard var target = windows.first(where: {$0.frame.contains(point)}) else { return nil }
     target.source = "mouse_down_window_server_hit"; return target
+}
+
+/** 优先使用 AX 命中身份；AX 缺失时，仅在 Dock 遮罩、原生目标和最前普通窗口共同指向自身时排除。 */
+func isOwnClick(windows: [CaptureWindowTarget], point: CGPoint, selected: CaptureWindowTarget?,
+                hitPid: pid_t?, nativePid: Int64, ownPid: pid_t, selectedIsDock: Bool) -> Bool {
+    if hitPid == ownPid || selected?.pid == ownPid { return true }
+    // 原生 PID 可能滞后，不能单独用它排除点击其他应用的事件。
+    if let hitPid, hitPid > 0 { return false }
+    guard selectedIsDock, nativePid == Int64(ownPid),
+          let normal = windows.first(where: { $0.layer == 0 && $0.frame.contains(point) }) else { return false }
+    return normal.pid == ownPid
 }
 
 func keyboardWindow(_ windows: [CaptureWindowTarget], pid: pid_t, focusedBounds: CGRect?) -> CaptureWindowTarget? {

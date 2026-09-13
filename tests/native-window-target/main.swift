@@ -25,4 +25,14 @@ precondition(unavailableWindowReason(a,info:[]) == "target_window_closed")
 precondition(unavailableWindowReason(a,info:nil) == "target_window_state_unavailable")
 let hidden: [String:Any] = [kCGWindowNumber as String:NSNumber(value:a.id),kCGWindowOwnerPID as String:NSNumber(value:a.pid),kCGWindowIsOnscreen as String:false]
 precondition(unavailableWindowReason(a,info:[hidden]) == "target_window_not_on_screen")
+let dock = CaptureWindowTarget(id:7,pid:639,frame:CGRect(x:0,y:0,width:1512,height:982),layer:20,source:"fixture")
+let ownPoint = CGPoint(x:250,y:200)
+// Dock 覆盖层不能绕过自身过滤，包括 AX 超时的情况。
+precondition(isOwnClick(windows:[dock,a],point:ownPoint,selected:dock,hitPid:42,nativePid:42,ownPid:42,selectedIsDock:true))
+precondition(isOwnClick(windows:[dock,a],point:ownPoint,selected:dock,hitPid:nil,nativePid:42,ownPid:42,selectedIsDock:true))
+// 点击外部窗口时，即使原生 PID 仍是自身，也不能丢弃。
+precondition(!isOwnClick(windows:[dock,a,other],point:CGPoint(x:850,y:200),selected:dock,hitPid:nil,nativePid:42,ownPid:42,selectedIsDock:true))
+precondition(!isOwnClick(windows:[dock,a],point:ownPoint,selected:dock,hitPid:639,nativePid:42,ownPid:42,selectedIsDock:true))
+precondition(!isOwnClick(windows:[dock,a],point:ownPoint,selected:dock,hitPid:nil,nativePid:639,ownPid:42,selectedIsDock:true))
+precondition(!isOwnClick(windows:[other,a],point:ownPoint,selected:other,hitPid:nil,nativePid:42,ownPid:42,selectedIsDock:false))
 print("PASS")
