@@ -101,6 +101,7 @@ export function AITrace({
               <TabsTrigger value="prompt">中文 Prompt</TabsTrigger>
               <TabsTrigger value="image">AI 看到的图片</TabsTrigger>
               <TabsTrigger value="input">完整输入</TabsTrigger>
+              <TabsTrigger value="steps">模型步骤</TabsTrigger>
             </TabsList>
             <TabsContent value="output" className="flex flex-col gap-3">
               <details>
@@ -134,6 +135,22 @@ export function AITrace({
             <TabsContent value="input">
               <pre className="whitespace-pre-wrap break-all text-xs">
                 {trace.userPrompt}
+              </pre>
+            </TabsContent>
+            <TabsContent value="steps">
+              <p className="text-xs text-muted-foreground">
+                每步消息、模型输出与工具结果；图片用原动作及哈希引用，不在这里重复展示图片字节。
+              </p>
+              <pre className="whitespace-pre-wrap break-all text-xs">
+                {JSON.stringify(
+                  {
+                    steps: trace.steps ?? [],
+                    tools: trace.tools ?? [],
+                    toolCalls: trace.toolCalls ?? [],
+                  },
+                  null,
+                  2,
+                )}
               </pre>
             </TabsContent>
           </Tabs>

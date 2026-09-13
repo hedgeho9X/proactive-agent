@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AXRecordDetails } from "./ax-record-details.tsx";
 import { PromptSettings } from "./prompt-settings.tsx";
+import { SearchSettings } from "./search-settings.tsx";
 import { FocusOverlay } from "./focus-overlay.tsx";
 import { projectAXRecords } from "./ax-stream.ts";
 import { isUnprocessedRecord } from "./record-filter.ts";
@@ -1271,6 +1272,11 @@ function App() {
             <PromptSettings
               values={state.prompts}
               concurrency={state.aiConcurrency ?? 10}
+              save={act}
+            />
+            <Separator />
+            <SearchSettings
+              hasKey={state.webSearch?.hasKey ?? false}
               save={act}
             />
             <Separator />

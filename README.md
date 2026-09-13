@@ -1,5 +1,7 @@
 # Proactive Lab
 
+屏幕理解支持有界 Agentic 取证：历史标题、动作详情、图片、AX/OCR 和应用背景；设置中配置 Tavily Key 后启用网页搜索和提取。调用步骤可在 AI 请求详情中查看，见 [Agentic Understanding](docs/AGENTIC-UNDERSTANDING.md)。
+
 所有项目自有静态 Prompt 集中在 [prompts/](prompts/README.md)，角色、动作模板与工具说明分文件管理。
 
 独立 macOS 主动式 Agent 实验应用：原生动作与证据采集、React 调试工作台、DSH 主子代理，以及基于 Vercel AI SDK 的屏幕事实理解。默认采集关闭，无模型凭证时显示 unavailable；Fixture 演示不调用真实模型。

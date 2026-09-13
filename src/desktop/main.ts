@@ -47,6 +47,12 @@ import { PromptStore, type PromptRole } from "../model/prompts.ts";
 import { prepareEvidence } from "../observation/prepare-evidence.ts";
 import { buildUserPrompt as buildMainPrompt } from "../../prompts/main.ts";
 import { trajectoryLine } from "../model/trajectory.ts";
+import {
+  EvidenceSession,
+  type EvidenceRow,
+} from "../understanding/evidence-session.ts";
+import { WebResearch } from "../understanding/web-research.ts";
+import { SearchSettings } from "../understanding/search-settings.ts";
 import { createHash } from "node:crypto";
 import { captureDiagnostic } from "../observation/capture-diagnostics.ts";
 import { desktopCredentials } from "./credentials.ts";
@@ -73,6 +79,7 @@ let runtimeReady = false;
 let mainIdle = true;
 let aiConcurrency = 10;
 let modelRoles: ModelRoles;
+let searchSettings: SearchSettings;
 let prompts: PromptStore;
 let queue: ActionQueue;
 let mode = "unavailable";
@@ -191,6 +198,7 @@ function snapshot() {
     model: modelRoles.get("main")?.model ?? null,
     hasKey: !!modelRoles.get("understanding"),
     modelRoles: modelRoles.snapshot(),
+    webSearch: searchSettings.snapshot(),
     prompts: prompts.snapshot(),
     queue: queue.list(),
     aiConcurrency,
@@ -434,6 +442,11 @@ async function bootstrap() {
     desktopCredentials,
   );
   await modelRoles.load();
+  searchSettings = new SearchSettings(
+    join(app.getPath("userData"), "web-search.json"),
+    desktopCredentials,
+  );
+  await searchSettings.load();
   prompts = new PromptStore(join(app.getPath("userData"), "prompts.json"));
   await prompts.load();
   const aiSettingsPath = join(app.getPath("userData"), "ai-settings.json");
@@ -509,15 +522,67 @@ async function bootstrap() {
         else if (event.type === "artifact") void queue.drain();
       },
     });
-    understanding = new UnderstandingService(cacheDir, (event) => {
-      modelRoles.status.understanding =
-        event.kind === "understanding.failed"
-          ? "last_request_failed"
-          : event.kind === "understanding.completed"
-            ? "connected"
-            : modelRoles.status.understanding;
-      emit(event);
-    });
+    understanding = new UnderstandingService(
+      cacheDir,
+      (event) => {
+        modelRoles.status.understanding =
+          event.kind === "understanding.failed"
+            ? "last_request_failed"
+            : event.kind === "understanding.completed"
+              ? "connected"
+              : modelRoles.status.understanding;
+        emit(event);
+      },
+      {
+        web: new WebResearch(() => searchSettings.getKey()),
+        createSession: async (input) => {
+          const action = input.action as any;
+          const anchor: EvidenceRow = {
+            id: action.action_id,
+            time: action.occurred_at,
+            app: action.app ?? {},
+            sequence: Number(action.source_sequence),
+            session: action.capture_session_id,
+            window_id: action.window?.id,
+          };
+          return EvidenceSession.create(
+            {
+              list: async () => {
+                const summaries = new Map(
+                  queue.list().map((row: any) => [row.actionId, row]),
+                );
+                return (await axHistory.list()).map((meta) => {
+                  const summary = summaries.get(meta.id) as any;
+                  return {
+                    id: meta.id,
+                    time:
+                      meta.trigger?.occurredAt ??
+                      meta.capturedAt ??
+                      meta.savedAt,
+                    app: { name: meta.app, bundle_id: meta.bundleId },
+                    sequence: meta.trigger?.sequence,
+                    session: meta.trigger?.session,
+                    window_id: meta.trigger?.targetWindow?.id,
+                    title: summary?.actionTitle ?? undefined,
+                    status: summary?.status ?? meta.captureStatus,
+                  };
+                });
+              },
+              read: async (id) =>
+                id === action.action_id
+                  ? {
+                      action: input.action,
+                      artifacts: input.artifacts,
+                      evidence: input.evidence,
+                    }
+                  : readObservation(id),
+              result: (id) => queue.result(id),
+            },
+            anchor,
+          );
+        },
+      },
+    );
     queue = new ActionQueue(
       join(app.getPath("userData"), "action-queue.sqlite"),
       {
@@ -944,6 +1009,10 @@ async function bootstrap() {
         }
         return result;
       }
+      case "web.config":
+        return searchSettings.update(p.apiKey);
+      case "web.status":
+        return searchSettings.snapshot();
       case "retry":
         queue.retry(String(p.actionId));
         return { queue: queue.list() };
