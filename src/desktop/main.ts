@@ -504,7 +504,8 @@ async function bootstrap() {
       3,
       {
         admitted: (event) => {
-          if (matchesRouting(event, routing.get())) queue.reserve(event.id);
+          if (!event.editingActivity && matchesRouting(event, routing.get()))
+            queue.reserve(event.id);
         },
         settled: (event) => queue.finishCapture(event.id),
       },
@@ -557,22 +558,25 @@ async function bootstrap() {
                 const summaries = new Map(
                   queue.list().map((row: any) => [row.actionId, row]),
                 );
-                return (await axHistory.list()).map((meta) => {
-                  const summary = summaries.get(meta.id) as any;
-                  return {
-                    id: meta.id,
-                    time:
-                      meta.trigger?.occurredAt ??
-                      meta.capturedAt ??
-                      meta.savedAt,
-                    app: { name: meta.app, bundle_id: meta.bundleId },
-                    sequence: meta.trigger?.sequence,
-                    session: meta.trigger?.session,
-                    window_id: meta.trigger?.targetWindow?.id,
-                    title: summary?.actionTitle ?? undefined,
-                    status: summary?.status ?? meta.captureStatus,
-                  };
-                });
+                // 草稿索引会持续更新，历史理解只能使用动作冻结的副本，不能读取未来修订。
+                return (await axHistory.list())
+                  .filter((meta) => meta.trigger?.kind !== "editing_session")
+                  .map((meta) => {
+                    const summary = summaries.get(meta.id) as any;
+                    return {
+                      id: meta.id,
+                      time:
+                        meta.trigger?.occurredAt ??
+                        meta.capturedAt ??
+                        meta.savedAt,
+                      app: { name: meta.app, bundle_id: meta.bundleId },
+                      sequence: meta.trigger?.sequence,
+                      session: meta.trigger?.session,
+                      window_id: meta.trigger?.targetWindow?.id,
+                      title: summary?.actionTitle ?? undefined,
+                      status: summary?.status ?? meta.captureStatus,
+                    };
+                  });
               },
               read: async (id) =>
                 id === action.action_id

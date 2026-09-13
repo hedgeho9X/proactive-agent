@@ -10,4 +10,12 @@ for key in letters + numbers {
 for key:Int64 in [36,49,48,51,53,76,117,123,124,125,126,122,24,27,41,43,44] {
     precondition(shouldRecordKey(key,flags:[]))
 }
+for key:Int64 in [0,18,24,30,41,43,49,51,65,82,115,117,119,123,124,125,126] {
+    precondition(isEditingKey(key,flags:[]))
+    precondition(isEditingKey(key,flags:.maskShift))
+    for flags:CGEventFlags in [.maskCommand,.maskControl,.maskAlternate] { precondition(!isEditingKey(key,flags:flags)) }
+    precondition(isEditingKey(key,flags:.maskSecondaryFn) == [115,117,119,123,124,125,126].contains(key))
+}
+precondition(isEditingKey(36,flags:.maskShift))
+for key:Int64 in [36,48,53,76,122] { precondition(!isEditingKey(key,flags:[])) }
 print("PASS")

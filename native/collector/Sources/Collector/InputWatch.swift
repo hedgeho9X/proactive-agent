@@ -7,6 +7,7 @@ final class InputWatch {
     var tap: CFMachPort?
     var source: CFRunLoopSource?
     let session = UUID().uuidString
+    lazy var editing = EditingWatch(session:session)
     var sequence = 0
     func start() {
         guard CGPreflightListenEventAccess() else { emit(["type":"watch_error","reason":"input_monitoring_required"]); exit(1) }
@@ -21,10 +22,17 @@ final class InputWatch {
         CFRunLoopAddSource(CFRunLoopGetMain(),source,.commonModes)
         CGEvent.tapEnable(tap:tap,enable:true)
         emit(["type":"watch_ready"])
+        editing.start()
     }
     func receive(_ type: CGEventType, _ event: CGEvent) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput { emit(["type":"watch_error","reason":"event_tap_disabled"]); exit(1) }
-        if type == .keyDown && !shouldRecordKey(event.getIntegerValueField(.keyboardEventKeycode),flags:event.flags) { return }
+        var editingActivity = false
+        if type == .keyDown {
+            let code = event.getIntegerValueField(.keyboardEventKeycode)
+            editingActivity = editing.handlesKey(code,flags:event.flags)
+            if !shouldRecordKey(code,flags:event.flags) { return }
+        }
+        if type == .leftMouseDown { editingActivity = editing.handlesClick(event.location) }
         let receivedAt = Date()
         var target = NSWorkspace.shared.frontmostApplication
         var targetBasis = "frontmost_at_event"
@@ -73,6 +81,8 @@ final class InputWatch {
         if keyboard { value["keyCode"] = code; value["key"] = keyNames[code] ?? "Key\(code)"; value["repeat"] = event.getIntegerValueField(.keyboardEventAutorepeat) != 0 }
         else { value["button"] = event.getIntegerValueField(.mouseEventButtonNumber); value["x"] = event.location.x; value["y"] = event.location.y; value["clickCount"] = event.getIntegerValueField(.mouseEventClickState) }
         value["targetWindow"] = lockedWindow?.json as Any? ?? NSNull()
+        value["editingSessionId"] = editing.reference(pid:app.processIdentifier)
+        value["editingActivity"] = editingActivity
         value["nativeEventWindowId"] = NSEvent(cgEvent:event)?.windowNumber ?? 0
         value["nativeEventTargetPid"] = nativePid
         value["targetResolution"] = ["status":lockedWindow == nil || targetError != nil ? "failed":"resolved","reason":targetError as Any? ?? NSNull(),"stage":"event_window_lookup","hitTestPid":hitTestPid.map {Int($0)} as Any? ?? NSNull(),"lookupAt":preciseTimestamp(lookupAt),"elapsedMs":Int(Date().timeIntervalSince(lookupAt)*1000)]

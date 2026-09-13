@@ -1,6 +1,7 @@
 // 日常视图以一次按下或一次点击为单位，历史松开和修饰键仅作诊断保留。
 export function meaningfulAXEvent(item: any) {
-  if (!item.trigger || item.trigger.kind === "click") return true;
+  if (!item.trigger || ["click", "editing_session"].includes(item.trigger.kind))
+    return true;
   if (item.trigger.kind !== "key_down") return false;
   const modifiers = Array.isArray(item.trigger.modifiers)
     ? item.trigger.modifiers

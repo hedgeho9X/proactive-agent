@@ -75,15 +75,17 @@ export function AITrace({
         </div>
       ) : (
         <p className="text-sm text-muted-foreground" role="status">
-          {status === "understanding"
-            ? "AI 正在理解这次操作…"
-            : status === "failed"
-              ? "AI 理解失败"
-              : status === "queued"
-                ? "等待 AI 理解…"
-                : status === "filtered"
-                  ? "此操作未进入 AI 理解"
-                  : "暂无 AI 理解结果"}
+          {status === "editing" || status === "editing_closed"
+            ? "输入框 AX 状态持续记录；编辑过程不逐条调用 AI。"
+            : status === "understanding"
+              ? "AI 正在理解这次操作…"
+              : status === "failed"
+                ? "AI 理解失败"
+                : status === "queued"
+                  ? "等待 AI 理解…"
+                  : status === "filtered"
+                    ? "此操作未进入 AI 理解"
+                    : "暂无 AI 理解结果"}
         </p>
       )}
       {(trace?.error || error || reason) && (

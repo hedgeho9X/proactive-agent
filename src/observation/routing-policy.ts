@@ -28,6 +28,8 @@ export function matchesRouting(trigger: any, selected: string[]) {
   );
 }
 export function snapshotRoutingReason(snapshot: any, selected: string[]) {
+  if (snapshot.trigger?.editingActivity === true)
+    return "editing_activity_accumulating";
   if (!matchesRouting(snapshot.trigger, selected))
     return "trigger_not_selected";
   if (snapshot.captureStatus !== "captured") return "capture_not_ready";

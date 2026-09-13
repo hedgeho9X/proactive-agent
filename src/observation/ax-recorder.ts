@@ -2,12 +2,14 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AXHistory } from "./ax-history.ts";
+import { EditingSessions } from "./editing-sessions.ts";
 
 // 原始输入独立落盘；在途数量有界，满额时记录原因，不积压过时截图请求。
 export class AXRecorder {
   private child?: ChildProcessWithoutNullStreams;
   private jobs = new Set<Promise<void>>();
   private capturing = 0;
+  private editing: EditingSessions;
   private scope: { allApps: boolean; allowedBundleIds: string[] } = {
     allApps: true,
     allowedBundleIds: [],
@@ -24,7 +26,9 @@ export class AXRecorder {
       admitted: (event: any) => void;
       settled: (event: any) => void;
     },
-  ) {}
+  ) {
+    this.editing = new EditingSessions(history, changed);
+  }
   status() {
     return {
       ...this.current,
@@ -52,6 +56,11 @@ export class AXRecorder {
       !this.scope.allowedBundleIds.includes(event.bundleId)
     )
       return;
+    if (["editing_update", "editing_closed"].includes(event.kind)) {
+      await this.editing.accept(event);
+      return;
+    }
+    const editingEvidence = this.editing.evidence(event);
     const captures = ["click", "key_down"].includes(event.kind);
     // 防御旧监听协议，松开及修饰键不再生成空快照记录。
     if (!captures) return;
@@ -76,6 +85,7 @@ export class AXRecorder {
           capturedAt: null,
           nodes: [],
           trigger: event,
+          editingEvidence,
           captureStatus,
           partial: true,
           screenshot: { status: "unavailable", reason: captureStatus },
@@ -259,6 +269,7 @@ export class AXRecorder {
         child.stdin.end();
       });
     await Promise.all([...this.jobs]);
+    await this.editing.close();
     if (this.current.state !== "failed") this.current.state = "stopped";
     this.changed();
     return this.status();

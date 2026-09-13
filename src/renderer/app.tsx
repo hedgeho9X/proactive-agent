@@ -114,6 +114,8 @@ const statusNames: Record<string, string> = {
   stopping: "停止中",
   pending: "待采集",
   captured: "已采集",
+  editing: "编辑中",
+  editing_closed: "草稿已结束",
   skipped_busy: "采集繁忙",
   shared: "共享",
   excluded: "已排除",

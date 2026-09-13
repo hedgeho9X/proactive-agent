@@ -72,6 +72,7 @@ export function projectVisualEvidence(
       title_hint: focusTitle,
       region: region(regions.focus),
       selection: region(regions.selection),
+      prior_editing_observation: ax.editing_evidence,
     },
     axContext: { nodes, url: ax.url, title: ax.title, coverage: ax.coverage },
     screenshotMetadata: {

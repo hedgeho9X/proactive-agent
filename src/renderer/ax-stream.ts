@@ -20,12 +20,14 @@ export function projectAXRecords(records: any[]): StreamRow[] {
         timestamp: Date.parse(time),
         status: record.captureStatus ?? "captured",
         text: [
-          record.trigger?.kind === "click"
-            ? "点击"
-            : (record.trigger?.key ?? "手动快照"),
+          record.trigger?.kind === "editing_session"
+            ? "输入框草稿（持续采集，不逐条理解）"
+            : record.trigger?.kind === "click"
+              ? "点击"
+              : (record.trigger?.key ?? "手动快照"),
           ...(record.trigger?.modifiers ?? []),
           `${record.nodes ?? 0} 节点`,
-        "操作证据",
+          "操作证据",
         ].join(" · "),
         detail: { axRecord: record },
       };

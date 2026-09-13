@@ -72,7 +72,12 @@ export function AXRecordDetails({
     <div className="flex min-h-0 flex-col gap-4 p-4" aria-label="本地证据详情">
       <AITrace
         id={recordId}
-        status={aiStatus}
+        status={
+          aiStatus ??
+          (snapshot?.captureStatus?.startsWith("editing")
+            ? snapshot.captureStatus
+            : undefined)
+        }
         reason={aiReason}
         summary={summary}
         panels={{

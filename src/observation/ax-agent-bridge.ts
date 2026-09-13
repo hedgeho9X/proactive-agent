@@ -77,7 +77,7 @@ export function axObservation(snapshot: any) {
         slot: "ax",
         status: protectedEvidence
           ? "excluded"
-          : nodes.length
+          : nodes.length || snapshot.editingEvidence
             ? "captured"
             : "unavailable",
         reason: nodes.length ? null : "ax_unavailable",
@@ -109,7 +109,7 @@ export function axObservation(snapshot: any) {
     ],
     artifacts: {
       ax:
-        !protectedEvidence && nodes.length
+        !protectedEvidence && (nodes.length || snapshot.editingEvidence)
           ? artifact("ax", {
               nodes: filtered.normalized,
               raw_nodes: snapshot.nodes,
@@ -122,6 +122,7 @@ export function axObservation(snapshot: any) {
                 ) ?? null,
               focus_title_reliability: "辅助线索，可能过时或指错控件",
               context: filtered,
+              editing_evidence: snapshot.editingEvidence ?? null,
               coverage: {
                 partial: !!snapshot.partial,
                 timing: snapshot.timing,

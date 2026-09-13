@@ -171,7 +171,7 @@ if CommandLine.arguments.contains("--watch-input") {
     _ = NSApplication.shared
     let watcher = InputWatch(); watcher.start()
     // 父进程退出或停止时关闭 stdin，避免孤儿监听进程继续记录。
-    DispatchQueue.global().async { while readLine() != nil {} ; exit(0) }
+    DispatchQueue.global().async { while readLine() != nil {} ; DispatchQueue.main.async { watcher.editing.stop(); exit(0) } }
     RunLoop.main.run(); exit(0)
 }
 if let index = CommandLine.arguments.firstIndex(of:"--inspect"), CommandLine.arguments.count > index + 1, let pid = Int32(CommandLine.arguments[index + 1]) {
