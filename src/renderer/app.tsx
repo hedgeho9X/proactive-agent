@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AXRecordDetails } from "./ax-record-details.tsx";
 import { UnderstandingText, understandingCost } from "./understanding-row.tsx";
+import { ApplicationIcon } from "./application-icon.tsx";
 import { PromptSettings } from "./prompt-settings.tsx";
 import { SearchSettings } from "./search-settings.tsx";
 import { FocusOverlay } from "./focus-overlay.tsx";
@@ -691,7 +692,17 @@ function App() {
       <>
         <time className="event-time">{row.time}</time>
         <span className="event-kind">
-          <Icon />
+          {row.kind === "action" ? (
+            <ApplicationIcon
+              bundleId={
+                row.detail?.axRecord?.bundleId ??
+                row.detail?.action?.app?.bundle_id
+              }
+              name={row.label}
+            />
+          ) : (
+            <Icon />
+          )}
           <span className="truncate">{row.label}</span>
         </span>
         {row.detail?.actionTitle ? (

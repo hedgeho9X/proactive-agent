@@ -150,6 +150,7 @@ final class Collector: @unchecked Sendable {
     }
 }
 if CommandLine.arguments.contains("--prepare-evidence") { prepareEvidence(); exit(0) }
+if let index = CommandLine.arguments.firstIndex(of:"--app-icon"), CommandLine.arguments.count > index + 1 { _ = NSApplication.shared; emit(applicationIcon(CommandLine.arguments[index + 1])); exit(0) }
 if CommandLine.arguments.contains("--inspect-apps") { emit(["apps":inspectorApps()]); exit(0) }
 if CommandLine.arguments.contains("--inspect-stream") {
     _ = NSApplication.shared

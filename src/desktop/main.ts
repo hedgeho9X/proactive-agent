@@ -42,6 +42,7 @@ import {
 } from "../model/understanding.ts";
 import type { ModelConfig } from "../model/gemini.ts";
 import { DesktopDanmaku } from "./danmaku.ts";
+import { ApplicationIcons } from "./application-icons.ts";
 import { HistoryClear } from "../observation/clear-history.ts";
 import { PromptStore, type PromptRole } from "../model/prompts.ts";
 import { prepareEvidence } from "../observation/prepare-evidence.ts";
@@ -458,6 +459,9 @@ async function bootstrap() {
     Math.min(20, Math.trunc(Number(aiSettings.concurrency)) || 10),
   );
   const cacheDir = join(app.getPath("userData"), "understanding");
+  const applicationIcons = new ApplicationIcons(
+    join(app.getAppPath(), "dist/native/ProactiveCollector"),
+  );
   function openStores() {
     axHistory = new AXHistory(
       join(app.getPath("userData"), "ax-snapshots"),
@@ -854,6 +858,8 @@ async function bootstrap() {
         await routing.update(p.triggers);
         void queue.drain();
         return snapshot();
+      case "app.icon":
+        return applicationIcons.get(String(p.bundleId ?? ""));
       case "ax.apps":
       case "ax.inspect": {
         const pid = Number(p.pid);
