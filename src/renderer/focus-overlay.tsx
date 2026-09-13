@@ -1,3 +1,4 @@
+/** 使用固定默认样式展示截图标注，支持放大和复制；不修改原图。 */
 import React, { useEffect, useState } from "react";
 import { projectBBox, projectPoint } from "./bbox.ts";
 import { ContextMenu } from "radix-ui";
@@ -8,8 +9,10 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { DetailDisclosure } from "./detail-disclosure.tsx";
 import { screenshotPNG } from "./copy-screenshot.ts";
 
+/** 将标注缺失原因转为说明文字。 */
 const reason = (item: any) =>
   item?.status === "not_applicable"
     ? "本次不是点击事件"
@@ -22,6 +25,7 @@ const reason = (item: any) =>
         }[item?.reason as string] ??
         item?.reason ??
         "应用未提供范围");
+/** 标注默认开启且仅画轮廓；放大视图按可用屏幕空间适配。 */
 export function FocusOverlay({
   screenshot,
   trigger,
@@ -31,12 +35,12 @@ export function FocusOverlay({
   trigger?: any;
   onSelectNode?: (id: string) => void;
 }) {
-  const [enabled, setEnabled] = useState(true);
-  const [opacity, setOpacity] = useState(0);
-  const [focusColor, setFocusColor] = useState("#3b82f6");
-  const [selectionColor, setSelectionColor] = useState("#f59e0b");
-  const [clickColor, setClickColor] = useState("#10b981");
-  const [mode, setMode] = useState("both");
+  const enabled = true,
+    opacity = 0,
+    mode = "both";
+  const focusColor = "#3b82f6",
+    selectionColor = "#f59e0b",
+    clickColor = "#10b981";
   const [expanded, setExpanded] = useState(false);
   const [zoom, setZoom] = useState(0);
   const [naturalWidth, setNaturalWidth] = useState(screenshot.pixelWidth ?? 0);
@@ -83,6 +87,7 @@ export function FocusOverlay({
       ? projectBBox(screenshot.regions?.[layer.key]?.rect, screenshot.frame)
       : null,
   }));
+  /** 根据当前默认标注生成复制图，原图复制保留原始像素。 */
   const copy = async (annotated: boolean) => {
     setCopying(true);
     setCopyStatus("");
@@ -124,6 +129,7 @@ export function FocusOverlay({
       setCopying(false);
     }
   };
+  /** 缩略图和放大图共享标注和复制入口。 */
   const imageView = (large: boolean) => (
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>
@@ -243,112 +249,50 @@ export function FocusOverlay({
     </ContextMenu.Root>
   );
   return (
-    <div className="space-y-3">
-      {!baked && (
-        <div className="flex flex-wrap items-center gap-3 text-xs">
-          <label className="flex items-center gap-1">
-            <input
-              type="checkbox"
-              checked={enabled}
-              onChange={(e) => setEnabled(e.target.checked)}
-            />
-            显示 bbox
-          </label>
-          <select
-            aria-label="标注范围"
-            className="rounded border bg-background p-1"
-            value={mode}
-            onChange={(e) => setMode(e.target.value)}
-          >
-            <option value="both">全部区域</option>
-            <option value="focus">仅焦点控件</option>
-            <option value="selection">仅文字选区</option>
-            <option value="click">仅点击命中</option>
-          </select>
-          <label className="flex items-center gap-1">
-            填充强度{" "}
-            <input
-              aria-label="bbox 透明度"
-              type="range"
-              min="0"
-              max="0.6"
-              step="0.01"
-              value={opacity}
-              onChange={(e) => setOpacity(Number(e.target.value))}
-            />
-            {Math.round(opacity * 100)}%（0 为仅轮廓）
-          </label>
-          <label className="flex items-center gap-1">
-            焦点颜色
-            <input
-              aria-label="焦点颜色"
-              type="color"
-              value={focusColor}
-              onChange={(e) => setFocusColor(e.target.value)}
-            />
-          </label>
-          <label className="flex items-center gap-1">
-            选区颜色
-            <input
-              aria-label="选区颜色"
-              type="color"
-              value={selectionColor}
-              onChange={(e) => setSelectionColor(e.target.value)}
-            />
-          </label>
-          <label className="flex items-center gap-1">
-            点击颜色
-            <input
-              aria-label="点击颜色"
-              type="color"
-              value={clickColor}
-              onChange={(e) => setClickColor(e.target.value)}
-            />
-          </label>
-        </div>
-      )}
-      {!mapped && !baked && (
-        <p className="text-sm text-muted-foreground">
-          这份旧快照缺少准确坐标映射，请重新采集后查看 bbox。
-        </p>
-      )}
-      {mapped && (
-        <div className="text-xs text-muted-foreground">
-          {layers.map((layer) => (
-            <p key={layer.key}>
-              {layer.label}：
-              {layer.box
-                ? `${Math.round(layer.source.rect.width)} × ${Math.round(layer.source.rect.height)} pt${layer.box.clipped ? "（已裁剪到窗口内）" : ""}`
-                : reason(layer.source)}
-              {layer.source?.sampledAt && (
-                <span className="ml-2">采样完成 {layer.source.sampledAt}</span>
-              )}
-              {layer.source?.nodeId && (
-                <button
-                  className="ml-2 underline"
-                  onClick={() => onSelectNode?.(layer.source.nodeId)}
-                >
-                  {layer.source.nodeId} ·{" "}
-                  {layer.source.sampledAttributes?.AXRole?.value?.text ??
-                    "查看节点"}
-                </button>
-              )}
-              {layer.box && layer.box.width * layer.box.height > 6000 && (
-                <span> · 范围较粗，覆盖大部分窗口</span>
-              )}
-            </p>
-          ))}
-          <p>
-            默认不填色，轮廓画在范围外侧。绿色空心圈是事件点击坐标，绿色框是 AX
-            返回的命中控件范围；大框不代表精确到文字。区域采样：
-            {screenshot.regionsSampledAt ?? "未记录"}。颜色不修改原图。
-          </p>
-        </div>
-      )}
-      <p className="text-xs text-muted-foreground">
-        点击图片放大，右键复制原图或当前标注图。
-      </p>
+    <div className="flex flex-col gap-2">
       {imageView(false)}
+      <DetailDisclosure title="标注说明">
+        {!mapped && !baked && (
+          <p className="text-sm text-muted-foreground">
+            这份旧快照缺少准确坐标映射，请重新采集后查看 bbox。
+          </p>
+        )}
+        {mapped && (
+          <div className="text-xs text-muted-foreground">
+            {layers.map((layer) => (
+              <p key={layer.key}>
+                {layer.label}：
+                {layer.box
+                  ? `${Math.round(layer.source.rect.width)} × ${Math.round(layer.source.rect.height)} pt${layer.box.clipped ? "（已裁剪到窗口内）" : ""}`
+                  : reason(layer.source)}
+                {layer.source?.sampledAt && (
+                  <span className="ml-2">
+                    采样完成 {layer.source.sampledAt}
+                  </span>
+                )}
+                {layer.source?.nodeId && (
+                  <button
+                    className="ml-2 underline"
+                    onClick={() => onSelectNode?.(layer.source.nodeId)}
+                  >
+                    {layer.source.nodeId} ·{" "}
+                    {layer.source.sampledAttributes?.AXRole?.value?.text ??
+                      "查看节点"}
+                  </button>
+                )}
+                {layer.box && layer.box.width * layer.box.height > 6000 && (
+                  <span> · 范围较粗，覆盖大部分窗口</span>
+                )}
+              </p>
+            ))}
+            <p>
+              默认不填色，轮廓画在范围外侧。绿色空心圈是事件点击坐标，绿色框是
+              AX 返回的命中控件范围；大框不代表精确到文字。区域采样：
+              {screenshot.regionsSampledAt ?? "未记录"}。颜色不修改原图。
+            </p>
+          </div>
+        )}
+      </DetailDisclosure>
       <p role="status" className="text-xs">
         {copying ? "正在复制…" : copyStatus}
       </p>
