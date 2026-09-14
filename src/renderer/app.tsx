@@ -3,6 +3,7 @@ import { AXRecordDetails } from "./ax-record-details.tsx";
 import { UnderstandingText, understandingCost } from "./understanding-row.tsx";
 import { ApplicationIcon } from "./application-icon.tsx";
 import { PromptSettings } from "./prompt-settings.tsx";
+import { SettingsNavigation } from "./settings-navigation.tsx";
 import { SearchSettings } from "./search-settings.tsx";
 import { FocusOverlay } from "./focus-overlay.tsx";
 import { projectAXRecords } from "./ax-stream.ts";
@@ -1276,287 +1277,325 @@ function App() {
           </SheetContent>
         </Sheet>
         <Dialog open={settings} onOpenChange={setSettings}>
-          <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
-            <DialogHeader>
+          <DialogContent className="flex h-[min(740px,90dvh)] w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
+            <DialogHeader className="border-b px-5 py-4">
               <DialogTitle>设置</DialogTitle>
               <DialogDescription className="sr-only">
                 独立模型角色与允许观察的应用
               </DialogDescription>
             </DialogHeader>
-            <Tabs defaultValue="understanding">
-              <TabsList className="w-full">
-                {(Object.keys(roleNames) as Role[]).map((role) => (
-                  <TabsTrigger key={role} value={role}>
-                    {roleNames[role]}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-              {(Object.keys(roleNames) as Role[]).map((role) => (
-                <TabsContent key={role} value={role} className="pt-3">
-                  <ModelForm
-                    role={role}
-                    config={state.modelRoles?.[role]}
-                    busy={!!busy}
-                    onSave={(role, config) => act("config", { role, config })}
-                  />
-                </TabsContent>
-              ))}
-            </Tabs>
-            <Separator />
-            <PromptSettings
-              values={state.prompts}
-              concurrency={state.aiConcurrency ?? 10}
-              save={act}
-            />
-            <Separator />
-            <SearchSettings
-              hasKey={state.webSearch?.hasKey ?? false}
-              save={act}
-            />
-            <Separator />
-            <div className="flex flex-col gap-2">
-              <p className="text-sm text-muted-foreground">
-                桌面弹幕 · 当前启动会话生效，最多同时一条；关闭后 Agent
-                仍可在时间线回复。
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  aria-pressed={state.danmakuEnabled !== false}
-                  disabled={!!busy}
-                  onClick={() =>
-                    act("danmaku.enabled", {
-                      enabled: state.danmakuEnabled === false,
-                    })
-                  }
-                >
-                  {state.danmakuEnabled === false
-                    ? "启用桌面弹幕"
-                    : "关闭桌面弹幕"}
-                </Button>
-                <Button
-                  variant="outline"
-                  disabled={!!busy || state.danmakuEnabled === false}
-                  onClick={() => act("danmaku.preview")}
-                >
-                  测试桌面弹幕
-                </Button>
-                <Button
-                  variant="ghost"
-                  disabled={!!busy}
-                  onClick={() => act("danmaku.clear")}
-                >
-                  清除弹幕
-                </Button>
-              </div>
-            </div>
-            <Separator />
-            <FieldGroup className="gap-3">
-              <FieldLabel>哪些操作交给 Agent</FieldLabel>
-              <p className="text-xs text-muted-foreground">
-                默认 Enter 和空格；采到有效证据后调用屏幕理解，再交给主
-                Agent。需要配置两者的模型和
-                Key；操作键只是关注信号，不等于已提交成功。
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                {routingOptions.map((option) => (
-                  <label
-                    key={option.id}
-                    className="flex items-center gap-2 text-sm"
-                  >
-                    <input
-                      type="checkbox"
-                      disabled={!!busy}
-                      checked={(state.routing ?? defaultRouting).includes(
-                        option.id,
-                      )}
-                      onChange={(e) =>
-                        void act("routing.update", {
-                          triggers: e.target.checked
-                            ? [...(state.routing ?? defaultRouting), option.id]
-                            : (state.routing ?? defaultRouting).filter(
-                                (id: string) => id !== option.id,
-                              ),
-                        })
-                      }
-                    />
-                    {option.label}
-                  </label>
-                ))}
-              </div>
-            </FieldGroup>
-            <Separator />
-            <FieldGroup className="gap-2">
-              <FieldLabel>手动采集一次（仅保存证据）</FieldLabel>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!!busy}
-                onClick={async () => {
-                  try {
-                    setCaptureApps((await api.invoke("ax.apps")).apps);
-                  } catch {
-                    setError("无法读取应用列表");
-                  }
-                }}
-              >
-                刷新应用列表
-              </Button>
-              <select
-                aria-label="手动采集目标应用"
-                className="rounded border bg-background p-2 text-sm"
-                value={manualPid}
-                onChange={(e) => setManualPid(e.target.value)}
-              >
-                <option value="">选择应用</option>
-                {captureApps.map((item) => (
-                  <option key={item.pid} value={item.pid}>
-                    {item.name} · {item.pid}
-                  </option>
-                ))}
-              </select>
-              <Button
-                size="sm"
-                disabled={
-                  !!busy || !manualPid || state.collector.state === "running"
-                }
-                onClick={() =>
-                  void act("ax.inspect", { pid: Number(manualPid) })
-                }
-              >
-                立即采集
-              </Button>
-            </FieldGroup>
-            <Separator />
-            <FieldGroup className="gap-3">
-              <Field className="gap-2">
-                <FieldLabel htmlFor="capture-scope">观察范围</FieldLabel>
-                <Select
-                  value={allApps ? "all" : "selected"}
-                  onValueChange={(value) => setAllApps(value === "all")}
-                  disabled={state.collector.state === "running"}
-                >
-                  <SelectTrigger id="capture-scope">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">
-                      所有应用（跟随前台窗口）
-                    </SelectItem>
-                    <SelectItem value="selected">指定应用</SelectItem>
-                  </SelectContent>
-                </Select>
-                {!allApps && (
+            <SettingsNavigation
+              panels={{
+                models: (
+                  <Tabs defaultValue="understanding">
+                    <TabsList className="w-full">
+                      {(Object.keys(roleNames) as Role[]).map((role) => (
+                        <TabsTrigger key={role} value={role}>
+                          {roleNames[role]}
+                        </TabsTrigger>
+                      ))}
+                    </TabsList>
+                    {(Object.keys(roleNames) as Role[]).map((role) => (
+                      <TabsContent
+                        key={role}
+                        value={role}
+                        forceMount
+                        className="pt-3 data-[state=inactive]:hidden"
+                      >
+                        <ModelForm
+                          role={role}
+                          config={state.modelRoles?.[role]}
+                          busy={!!busy}
+                          onSave={(role, config) =>
+                            act("config", { role, config })
+                          }
+                        />
+                      </TabsContent>
+                    ))}
+                  </Tabs>
+                ),
+                understanding: (
                   <>
-                    <FieldLabel htmlFor="capture-apps">
-                      应用 Bundle ID（逗号或空格分隔）
-                    </FieldLabel>
-                    <Input
-                      id="capture-apps"
-                      value={bundleIds}
-                      onChange={(e) => setBundleIds(e.target.value)}
-                      placeholder="com.apple.TextEdit"
-                      disabled={state.collector.state === "running"}
+                    <PromptSettings
+                      section="concurrency"
+                      values={state.prompts}
+                      concurrency={state.aiConcurrency ?? 10}
+                      save={act}
                     />
+                    <FieldGroup className="gap-3">
+                      <FieldLabel>哪些操作交给 Agent</FieldLabel>
+                      <p className="text-xs text-muted-foreground">
+                        采到有效证据后先调用屏幕理解，再交给主
+                        Agent。需要配置两者的模型和
+                        Key；操作键只是关注信号，不等于已提交成功。
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        {routingOptions.map((option) => (
+                          <label
+                            key={option.id}
+                            className="flex items-center gap-2 text-sm"
+                          >
+                            <input
+                              type="checkbox"
+                              disabled={!!busy}
+                              checked={(
+                                state.routing ?? defaultRouting
+                              ).includes(option.id)}
+                              onChange={(e) =>
+                                void act("routing.update", {
+                                  triggers: e.target.checked
+                                    ? [
+                                        ...(state.routing ?? defaultRouting),
+                                        option.id,
+                                      ]
+                                    : (state.routing ?? defaultRouting).filter(
+                                        (id: string) => id !== option.id,
+                                      ),
+                                })
+                              }
+                            />
+                            {option.label}
+                          </label>
+                        ))}
+                      </div>
+                    </FieldGroup>
                   </>
-                )}
-              </Field>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={!!busy}
-                  onClick={() => void act("permissions")}
-                >
-                  检测权限
-                </Button>
-                <span className="flex-1" />
-                <Badge variant="outline">
-                  {statusText(state.collector.state)}
-                </Badge>
-                <Button
-                  size="sm"
-                  disabled={
-                    !!busy ||
-                    (!allApps &&
-                      !bundleIds.trim() &&
-                      state.collector.state !== "running")
-                  }
-                  onClick={() =>
-                    void act(
-                      state.collector.state === "running"
-                        ? "capture.stop"
-                        : "capture.start",
-                      { bundleIds, allApps },
-                    )
-                  }
-                >
-                  {state.collector.state === "running" ? "停止" : "开始观察"}
-                </Button>
-              </div>
-              {state.collector.reason && (
-                <p className="text-xs text-muted-foreground">
-                  {state.collector.reason}
-                </p>
-              )}
-              {Object.entries({
-                accessibility: "辅助功能",
-                screenRecording: "屏幕录制",
-                inputMonitoring: "输入监控",
-              }).map(([permission, label]) => (
-                <div
-                  key={permission}
-                  className="flex items-center justify-between gap-2 text-sm"
-                >
-                  <span>
-                    {label} ·{" "}
-                    {state.collector.permissions?.[permission] === true
-                      ? "采集进程可用"
-                      : state.collector.permissions?.[permission] === false
-                        ? "未授权"
-                        : "未检测"}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!!busy}
-                    onClick={() =>
-                      void act("permission.request", { permission })
-                    }
-                  >
-                    去授权
-                  </Button>
-                </div>
-              ))}
-              <p className="text-xs text-muted-foreground">
-                请在系统设置中确认授权应用身份，返回应用后会自动检测，也可点击“检测权限”。若系统要求，请退出并重新打开应用。开发版可能显示为
-                Electron。
-              </p>
-            </FieldGroup>
-            <Separator />
-            <div className="flex gap-2">
-              <Button
-                variant="ghost"
-                size="xs"
-                disabled={!!busy}
-                onClick={() => void act("fixture")}
-              >
-                合成演示
-              </Button>
-              <Button
-                variant="ghost"
-                size="xs"
-                disabled={!!busy}
-                onClick={() => void act("readRoot")}
-              >
-                只读目录
-              </Button>
-            </div>
-            {error && (
-              <Alert variant="destructive">
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
+                ),
+                prompts: (
+                  <PromptSettings
+                    values={state.prompts}
+                    concurrency={state.aiConcurrency ?? 10}
+                    save={act}
+                  />
+                ),
+                search: (
+                  <SearchSettings
+                    hasKey={state.webSearch?.hasKey ?? false}
+                    save={act}
+                  />
+                ),
+                capture: (
+                  <FieldGroup className="gap-3">
+                    <Field className="gap-2">
+                      <FieldLabel htmlFor="capture-scope">观察范围</FieldLabel>
+                      <Select
+                        value={allApps ? "all" : "selected"}
+                        onValueChange={(value) => setAllApps(value === "all")}
+                        disabled={state.collector.state === "running"}
+                      >
+                        <SelectTrigger id="capture-scope">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">
+                            所有应用（跟随前台窗口）
+                          </SelectItem>
+                          <SelectItem value="selected">指定应用</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {!allApps && (
+                        <>
+                          <FieldLabel htmlFor="capture-apps">
+                            应用 Bundle ID（逗号或空格分隔）
+                          </FieldLabel>
+                          <Input
+                            id="capture-apps"
+                            value={bundleIds}
+                            onChange={(e) => setBundleIds(e.target.value)}
+                            placeholder="com.apple.TextEdit"
+                            disabled={state.collector.state === "running"}
+                          />
+                        </>
+                      )}
+                    </Field>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!!busy}
+                        onClick={() => void act("permissions")}
+                      >
+                        检测权限
+                      </Button>
+                      <span className="flex-1" />
+                      <Badge variant="outline">
+                        {statusText(state.collector.state)}
+                      </Badge>
+                      <Button
+                        size="sm"
+                        disabled={
+                          !!busy ||
+                          (!allApps &&
+                            !bundleIds.trim() &&
+                            state.collector.state !== "running")
+                        }
+                        onClick={() =>
+                          void act(
+                            state.collector.state === "running"
+                              ? "capture.stop"
+                              : "capture.start",
+                            { bundleIds, allApps },
+                          )
+                        }
+                      >
+                        {state.collector.state === "running"
+                          ? "停止"
+                          : "开始观察"}
+                      </Button>
+                    </div>
+                    {state.collector.reason && (
+                      <p className="text-xs text-muted-foreground">
+                        {state.collector.reason}
+                      </p>
+                    )}
+                    {Object.entries({
+                      accessibility: "辅助功能",
+                      screenRecording: "屏幕录制",
+                      inputMonitoring: "输入监控",
+                    }).map(([permission, label]) => (
+                      <div
+                        key={permission}
+                        className="flex items-center justify-between gap-2 text-sm"
+                      >
+                        <span>
+                          {label} ·{" "}
+                          {state.collector.permissions?.[permission] === true
+                            ? "采集进程可用"
+                            : state.collector.permissions?.[permission] ===
+                                false
+                              ? "未授权"
+                              : "未检测"}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={!!busy}
+                          onClick={() =>
+                            void act("permission.request", { permission })
+                          }
+                        >
+                          去授权
+                        </Button>
+                      </div>
+                    ))}
+                    <p className="text-xs text-muted-foreground">
+                      请在系统设置中确认授权应用身份，返回应用后会自动检测，也可点击“检测权限”。若系统要求，请退出并重新打开应用。开发版可能显示为
+                      Electron。
+                    </p>
+                  </FieldGroup>
+                ),
+                danmaku: (
+                  <div className="flex flex-col gap-2">
+                    <p className="text-sm text-muted-foreground">
+                      桌面弹幕 · 当前启动会话生效，最多同时一条；关闭后 Agent
+                      仍可在时间线回复。
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        aria-pressed={state.danmakuEnabled !== false}
+                        disabled={!!busy}
+                        onClick={() =>
+                          act("danmaku.enabled", {
+                            enabled: state.danmakuEnabled === false,
+                          })
+                        }
+                      >
+                        {state.danmakuEnabled === false
+                          ? "启用桌面弹幕"
+                          : "关闭桌面弹幕"}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        disabled={!!busy || state.danmakuEnabled === false}
+                        onClick={() => act("danmaku.preview")}
+                      >
+                        测试桌面弹幕
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        disabled={!!busy}
+                        onClick={() => act("danmaku.clear")}
+                      >
+                        清除弹幕
+                      </Button>
+                    </div>
+                  </div>
+                ),
+                debug: (
+                  <>
+                    <FieldGroup className="gap-2">
+                      <FieldLabel>手动采集一次（仅保存证据）</FieldLabel>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!!busy}
+                        onClick={async () => {
+                          try {
+                            setCaptureApps((await api.invoke("ax.apps")).apps);
+                          } catch {
+                            setError("无法读取应用列表");
+                          }
+                        }}
+                      >
+                        刷新应用列表
+                      </Button>
+                      <select
+                        aria-label="手动采集目标应用"
+                        className="rounded border bg-background p-2 text-sm"
+                        value={manualPid}
+                        onChange={(e) => setManualPid(e.target.value)}
+                      >
+                        <option value="">选择应用</option>
+                        {captureApps.map((item) => (
+                          <option key={item.pid} value={item.pid}>
+                            {item.name} · {item.pid}
+                          </option>
+                        ))}
+                      </select>
+                      <Button
+                        size="sm"
+                        disabled={
+                          !!busy ||
+                          !manualPid ||
+                          state.collector.state === "running"
+                        }
+                        onClick={() =>
+                          void act("ax.inspect", { pid: Number(manualPid) })
+                        }
+                      >
+                        立即采集
+                      </Button>
+                    </FieldGroup>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        disabled={!!busy}
+                        onClick={() => void act("fixture")}
+                      >
+                        合成演示
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        disabled={!!busy}
+                        onClick={() => void act("readRoot")}
+                      >
+                        只读目录
+                      </Button>
+                    </div>
+                  </>
+                ),
+              }}
+              footer={
+                error ? (
+                  <Alert variant="destructive">
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                ) : null
+              }
+            />
           </DialogContent>
         </Dialog>
       </div>

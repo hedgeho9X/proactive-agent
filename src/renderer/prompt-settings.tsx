@@ -1,8 +1,10 @@
+/** 分开展示提示词与并发配置；保存继续使用既有设置接口。 */
 import React, { useEffect, useState } from "react";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+/** 编辑单一角色的提示词，保存时不影响其他角色的草稿。 */
 function PromptField({
   role,
   value,
@@ -50,26 +52,28 @@ function PromptField({
     </Field>
   );
 }
+/** 根据所在分类展示提示词或并发设置，维持各自的本地草稿。 */
 export function PromptSettings({
   values,
   concurrency,
   save,
+  section = "prompts",
 }: {
   values: any;
   concurrency: number;
   save: (method: string, args: any) => Promise<boolean>;
+  section?: "prompts" | "concurrency";
 }) {
   const [parallel, setParallel] = useState(concurrency);
   return (
-    <details>
-      <summary className="cursor-pointer text-sm">
-        中文 Prompt 与理解并发
-      </summary>
-      <FieldGroup className="mt-3">
+    <FieldGroup>
+      {section === "prompts" && (
         <p className="text-xs text-muted-foreground">
           理解 Prompt 仅影响后续请求；修改主／子 Agent Prompt
           会重启运行时并保留会话。框架内置的协议说明不在此编辑。
         </p>
+      )}
+      {section === "concurrency" && (
         <Field>
           <FieldLabel htmlFor="ai-concurrency">
             AI 理解并发（1–20，默认 10）
@@ -90,16 +94,17 @@ export function PromptSettings({
             保存并发
           </Button>
         </Field>
-        {values &&
-          Object.keys(values).map((role) => (
-            <PromptField
-              key={role}
-              role={role}
-              value={values[role]}
-              save={save}
-            />
-          ))}
-      </FieldGroup>
-    </details>
+      )}
+      {section === "prompts" &&
+        values &&
+        Object.keys(values).map((role) => (
+          <PromptField
+            key={role}
+            role={role}
+            value={values[role]}
+            save={save}
+          />
+        ))}
+    </FieldGroup>
   );
 }
