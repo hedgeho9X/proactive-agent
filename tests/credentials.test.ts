@@ -33,6 +33,7 @@ test("三角色加密保存、并发更新、重启恢复及清除，快照不�
     await Promise.all(
       roles.map((role) =>
         config.update(role, {
+          baseUrl: "https://example.com/v1",
           model: "fixture-" + role,
           apiKey: "fixture-secret-" + role,
         }),
@@ -74,7 +75,11 @@ test("加密失败不保存明文或更换内存凭证，解密失败保留密�
     const file = join(root, "roles.json");
     const codec = fixtureCodec();
     const config = new ModelRoles(file, codec);
-    await config.update("main", { model: "fixture", apiKey: "fixture-secret" });
+    await config.update("main", {
+      baseUrl: "https://example.com/v1",
+      model: "fixture",
+      apiKey: "fixture-secret",
+    });
     const original = await readFile(file, "utf8");
     const unavailable: CredentialCodec = {
       encrypt() {
@@ -93,7 +98,10 @@ test("加密失败不保存明文或更换内存凭证，解密失败保留密�
     ).rejects.toThrow("fixture_keychain_locked");
     expect(await readFile(file, "utf8")).toBe(original);
     expect(locked.get("main")).toBeUndefined();
-    await locked.update("understanding", { model: "updated-without-key" });
+    await locked.update("understanding", {
+      baseUrl: "https://example.com/v1",
+      model: "updated-without-key",
+    });
     const recovered = new ModelRoles(file, codec);
     await recovered.load();
     expect(recovered.get("main")?.apiKey).toBe("fixture-secret");

@@ -4,7 +4,7 @@
 
 ## 已准备
 
-- 独立仓库：proactive-agent，不向 development-workspace 加入业务代码。
+- 独立仓库：proactive-agent，不向 开发工作区 加入业务代码。
 - 原始 PRD、研究依据、交接说明及两份源码研究笔记已复制到本项目。
 - 已检查新项目路径不存在；原有 Workspace 与 DeskLore 工作树未修改。
 - 本机可用 Bun 1.3.14、Node 22.23.1、Apple Swift 6.3.3；原生实际捕获尚未验证。

@@ -22,7 +22,7 @@ export class ModelRoles {
       role,
       {
         protocol: "openai-compatible",
-        baseUrl: "https://example.com/v1/",
+        baseUrl: "",
         apiKey: "",
         model: role === "understanding" ? "gemini-3.8-flash" : "",
         maxCalls: 30,

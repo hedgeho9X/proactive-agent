@@ -6,8 +6,8 @@
 
 - `bun install --frozen-lockfile` 安装固定依赖。
 - `bun run desktop` 先编译 Swift 采集器与 JS，再启动独立应用。
-- `bun run package:mac` 生成 `out/Proactive Lab-darwin-arm64/Proactive Lab.app`。
-- `PROACTIVE_DATA_DIR` 可设置专用验收数据目录；默认是 `~/Library/Application Support/Proactive Lab`。
+- `bun run package:mac` 生成 `out/Proactive Agent-darwin-arm64/Proactive Agent.app`。
+- `PROACTIVE_DATA_DIR` 可设置专用验收数据目录；默认是 `~/Library/Application Support/Proactive Agent`。
 - 新应用 bundle ID 为 `io.github.hedgeho9x.proactive-agent`，默认采集关闭，允许列表为空。
 
 Electron 锁定 44.1.1，本机包内 Node 24.19.0，实际确认 `node:sqlite.DatabaseSync` 可用。44.2.0 下载受网络阻塞，改用本机已有的官方 44.1.1 缓存，旧下载进程已按精确 PID 停止。

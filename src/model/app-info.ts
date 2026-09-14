@@ -65,7 +65,7 @@ export const appInfoMap: Readonly<Record<string, AppDefinition>> = {
     common_features: ["启动应用", "切换应用窗口"],
   },
   "io.github.hedgeho9x.proactive-agent": {
-    display_name: "Proactive Lab",
+    display_name: "Proactive Agent",
     category: "observation_tool",
     purpose: "本应用的桌面行为采集与 Agent 调试界面。",
     common_features: [

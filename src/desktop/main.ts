@@ -58,11 +58,11 @@ import { createHash } from "node:crypto";
 import { captureDiagnostic } from "../observation/capture-diagnostics.ts";
 import { desktopCredentials } from "./credentials.ts";
 
-app.setName("Proactive Lab");
+app.setName("Proactive Agent");
 app.setPath(
   "userData",
   process.env.PROACTIVE_DATA_DIR ??
-    join(app.getPath("appData"), "Proactive Lab"),
+    join(app.getPath("appData"), "Proactive Agent"),
 );
 // 同一数据目录只允许一个桌面实例，防止清理期间其他实例继续写入旧数据库。
 const ownsDataDirectory = app.requestSingleInstanceLock();
@@ -1169,7 +1169,7 @@ async function bootstrap() {
     height: 920,
     minWidth: 1000,
     minHeight: 650,
-    title: "Proactive Lab",
+    title: "Proactive Agent",
     backgroundColor: "#f5f5f2",
     webPreferences: {
       preload: join(app.getAppPath(), "dist", "desktop", "preload.cjs"),

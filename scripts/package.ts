@@ -3,7 +3,7 @@ import { packager } from "@electron/packager";
 const paths = await packager({
   dir: ".",
   out: "out",
-  name: "Proactive Lab",
+  name: "Proactive Agent",
   appBundleId: "io.github.hedgeho9x.proactive-agent",
   platform: "darwin",
   arch: process.arch as "arm64" | "x64",
@@ -22,7 +22,7 @@ const paths = await packager({
     /^\/native(?:\/|$)/,
   ],
   extendInfo: {
-    NSAppleEventsUsageDescription: "Proactive Lab 仅观察你选择的应用。",
+    NSAppleEventsUsageDescription: "Proactive Agent 仅观察你选择的应用。",
   },
 });
 console.log(paths.join("\n"));

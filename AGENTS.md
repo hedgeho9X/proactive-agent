@@ -1,4 +1,4 @@
-# Proactive Lab 协作规则
+# Proactive Agent 协作规则
 
 - 本项目是独立 macOS 主动式实验应用；需求与验收以 docs/PRD.md 为准。
 - 使用 Bun 与 bun.lock；DSH sidecar 可以使用其支持的 Node 运行时。

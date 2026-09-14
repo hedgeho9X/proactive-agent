@@ -1,6 +1,6 @@
 # 初始化与观察授权
 
-首次启动的三个模型角色均使用 OpenAI compatible，Base URL 为 https://example.com/v1/。屏幕理解默认模型为 gemini-3.8-flash；主 Agent、Sub-agent 的模型 ID 留空，由用户之后填写。已有保存配置优先，不覆盖用户配置。API Key 仍由用户显式输入，不预置、不写入配置文件。
+首次启动的三个模型角色均使用 OpenAI compatible，Base URL 为 （请自行填写服务地址）。屏幕理解默认模型为 gemini-3.8-flash；主 Agent、Sub-agent 的模型 ID 留空，由用户之后填写。已有保存配置优先，不覆盖用户配置。API Key 仍由用户显式输入，不预置、不写入配置文件。
 
 OpenAI 根地址请求自动补齐 /v1/chat/completions；已有 /v1 或自定义代理路径保持原前缀。默认配置只是连接预设，不表示该上游已验证支持模型或已完成鉴权。
 

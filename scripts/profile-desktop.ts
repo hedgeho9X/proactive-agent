@@ -7,7 +7,7 @@ const targets = await fetch(`http://127.0.0.1:${port}/json/list`).then((r) =>
   r.json(),
 );
 const target = targets.find((item: any) =>
-  item.url.endsWith("/proactive-agent/dist/renderer/index.html"),
+  item.url.endsWith("/dist/renderer/index.html"),
 );
 if (!target) throw new Error("proactive_window_not_found");
 const ws = new WebSocket(target.webSocketDebuggerUrl);

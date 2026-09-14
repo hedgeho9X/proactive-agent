@@ -13,9 +13,7 @@ test("三组配置独立、任意model id、snapshot与文件无key", async () =
     const roles = new ModelRoles(file);
     const defaults = roles.snapshot();
     expect(defaults.understanding.protocol).toBe("openai-compatible");
-    expect(defaults.understanding.baseUrl).toBe(
-      "https://example.com/v1/",
-    );
+    expect(defaults.understanding.baseUrl).toBe("");
     expect(defaults.understanding.model).toBe("gemini-3.8-flash");
     expect(defaults.main.model).toBe("");
     expect(defaults.subagent.model).toBe("");
@@ -26,10 +24,12 @@ test("三组配置独立、任意model id、snapshot与文件无key", async () =
       apiKey: "main-secret",
     });
     await roles.update("subagent", {
+      baseUrl: "https://example.com/v1",
       model: "another",
       apiKey: "child-secret",
     });
     await roles.update("understanding", {
+      baseUrl: "https://example.com/v1",
       model: "vision",
       apiKey: "vision-secret",
     });

@@ -217,7 +217,7 @@ function ModelForm({
 }) {
   const [draft, setDraft] = useState({
     protocol: config?.protocol ?? "openai-compatible",
-    baseUrl: config?.baseUrl ?? "https://example.com/v1/",
+    baseUrl: config?.baseUrl ?? "",
     model:
       config?.model ?? (role === "understanding" ? "gemini-3.8-flash" : ""),
     apiKey: "",

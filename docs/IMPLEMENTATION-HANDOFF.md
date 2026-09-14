@@ -4,7 +4,7 @@
 
 ## 1. 目标
 
-为 Jerry 建立一个新的 macOS 主动式 Agent 实验应用，工作名 Proactive Lab。重点是持续观测、事实理解、异步主子 Agent、可追溯证据和调试面板。新应用与旧 Proactive Agent 代码和数据独立。
+为 Jerry 建立一个新的 macOS 主动式 Agent 实验应用，工作名 Proactive Agent。重点是持续观测、事实理解、异步主子 Agent、可追溯证据和调试面板。新应用与其他应用 代码和数据独立。
 
 用户明确要求：首版不做插件安装与市场，但应尽量使用 DeepSeek Harness 同一套原子；优先复用现有运行时，避免重写 Agent loop。业务写工具先实现 Schema 和真实的 proposal 记录，让用户看清 Agent 想做什么；不要假装已完成外部操作。
 
@@ -20,13 +20,13 @@
 
 ## 3. 开工边界
 
-- 在独立新项目内工作，建议仓库名 `proactive-agent`，与现有 Proactive Agent 业务仓库并列；实际路径由承接任务的环境决定。
-- 当前 `development-workspace` 只做本地开发控制面，不把新业务代码直接塞进它，也不放回旧Desktop仓。
+- 在独立新项目内工作，建议仓库名 `proactive-agent`，与其他应用 业务仓库并列；实际路径由承接任务的环境决定。
+- 当前 `开发工作区` 只做本地开发控制面，不把新业务代码直接塞进它，也不放回旧Desktop仓。
 - 创建前检查目标路径是否已存在及Git/dirty状态，保留现有工作。
 - 使用Bun和bun.lock管理新项目；DSH运行时按其Node兼容要求执行，不强制上游源码改用Bun。
 - 文档和代码注释使用中文；标识符、协议字段、第三方名称保持原文。面向用户展示的代码块逐行解释/注释。
-- 不访问现有Proactive Agent、DeskLore的用户历史数据库，不运行Supabase CLI、Management API、直连或绕过方案，不修改生产环境。
-- 不启动 `/Applications/Proactive Agent.app`。测试新应用自己的明确身份，不能修改旧应用bundle ID来绕权限。
+- 不访问其他应用、DeskLore的用户历史数据库，不运行Supabase CLI、Management API、直连或绕过方案，不修改生产环境。
+- 测试应用自己的明确身份，不能修改其他应用 bundle ID 来绕过权限。
 - 用户选择的测试目录与本应用新SQLite是首版数据范围；模型凭证单独配置，不从其他业务配置复制秘密。
 
 ## 4. 第一切片必须先证明的事情

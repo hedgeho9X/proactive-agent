@@ -23,6 +23,6 @@
 
 ## 恢复方式
 
-先退出应用。系统废纸篓中的 `history-cleared-<UUID>` 目录包含原目录/数据库及 `manifest.json`。按原名称恢复到 Proactive Lab 数据目录；如果已有新记录，不要直接覆盖，应先保存新数据再人工合并或选择恢复版本。已被旧版逐条移走的快照仍分别留在废纸篓，本次不会清空系统废纸篓。
+先退出应用。系统废纸篓中的 `history-cleared-<UUID>` 目录包含原目录/数据库及 `manifest.json`。按原名称恢复到 Proactive Agent 数据目录；如果已有新记录，不要直接覆盖，应先保存新数据再人工合并或选择恢复版本。已被旧版逐条移走的快照仍分别留在废纸篓，本次不会清空系统废纸篓。
 
 本轮不修复 `foreground_changed_during_capture` 等采集时序问题。
