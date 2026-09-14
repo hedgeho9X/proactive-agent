@@ -23,6 +23,7 @@ import {
   snapshotRoutingReason,
 } from "../observation/routing-policy.ts";
 import { axObservation } from "../observation/ax-agent-bridge.ts";
+import { projectVisualEvidence } from "../model/understanding-evidence.ts";
 import { join, resolve } from "node:path";
 import {
   mkdir,
@@ -237,12 +238,6 @@ async function summarize(actionId: string, view: "raw" | "context") {
         },
       },
     };
-    (item.artifacts as any).ocr = { payload: { content: prepared.ocr } };
-    const ocr = item.evidence.find((e: any) => e.kind === "ocr");
-    if (ocr) {
-      ocr.status = prepared.ocr.status;
-      ocr.reason = prepared.ocr.reason ?? null;
-    }
   }
   const result = await understanding.summarize(
     {
@@ -335,7 +330,11 @@ async function startRuntime(fixture: boolean) {
         return {
           action_id: id,
           status: item.artifacts.ax ? "available" : "unavailable",
-          ...item.artifacts.ax?.payload?.content,
+          ...projectVisualEvidence(
+            item.artifacts.ax?.payload?.content,
+            item.artifacts.screenshot?.payload?.content,
+            null,
+          ),
         };
       const trace = await understanding.trace(id);
       if (kind === "image")
@@ -347,25 +346,35 @@ async function startRuntime(fixture: boolean) {
               imageHash: trace.imageHash,
             }
           : { status: "unavailable", reason: "model_input_image_not_saved" };
-      const ocr = trace
-        ? trace.promptInput
-          ? trace.promptInput.ocr
-          : JSON.parse(trace.userPrompt)?.artifacts?.ocr?.payload?.content
-        : item.artifacts.ocr?.payload?.content;
-      return {
-        action_id: id,
-        ...(ocr ?? { status: "unavailable", reason: "ocr_not_collected" }),
-      };
+      return { action_id: id, status: "unavailable", reason: "ocr_disabled" };
     },
     readObservation: async (id) => {
       const item = await readObservation(id);
       return {
         ...item,
         artifacts: Object.fromEntries(
-          Object.entries(item.artifacts).map(([k, a]) => [
-            k,
-            a ? { ...a, bytes: undefined } : null,
-          ]),
+          Object.entries(item.artifacts)
+            .filter(([k]) => k !== "ocr")
+            .map(([k, a]) => [
+              k,
+              a
+                ? {
+                    ...a,
+                    bytes: undefined,
+                    ...(k === "ax"
+                      ? {
+                          payload: {
+                            content: projectVisualEvidence(
+                              a.payload?.content,
+                              item.artifacts.screenshot?.payload?.content,
+                              null,
+                            ),
+                          },
+                        }
+                      : {}),
+                  }
+                : null,
+            ]),
         ),
       };
     },

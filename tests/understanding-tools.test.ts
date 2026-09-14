@@ -21,6 +21,7 @@ test("工具拒绝未来ID、限制图片次数并输出真实图片内容块", 
     tools = createUnderstandingTools(session, undefined, traces) as any;
   expect(tools.get_action_detail).toBeDefined();
   expect(tools.web_search).toBeUndefined();
+  expect(tools.get_action_ocr).toBeUndefined();
   const options = { toolCallId: "fixture", messages: [] };
   expect(
     await tools.get_action_detail.execute({ action_id: "future" }, options),

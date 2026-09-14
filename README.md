@@ -37,6 +37,8 @@ bun run package:mac # 打包 macOS 应用
 
 中文 Prompt 集中在 [prompts/](prompts/README.md)，可以独立修改。
 
+模型输入使用标注截图、精简 AX 文字和独立草稿，不生成 OCR；原始 AX 留在本地供调试。见 [证据精简](docs/EVIDENCE-COMPACTION.md)。
+
 ## 数据与边界
 
 采集默认关闭。本地记录保存在 `~/Library/Application Support/Proactive Agent`；API Key 使用系统凭据能力加密保存，截图、AX 和草稿记录并非加密资料库。启用 AI 理解后，相关文字和图片会发送给你配置的模型服务。

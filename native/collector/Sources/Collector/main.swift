@@ -1,7 +1,6 @@
 import AppKit
 import ApplicationServices
 import ScreenCaptureKit
-import Vision
 import ImageIO
 
 // stdout 只承载逐行协议，采集必须收到显式 start。
@@ -144,9 +143,8 @@ final class Collector: @unchecked Sendable {
             saveCache(CachedFrame(pid:pid,windowId:window.windowID,frame:window.frame,png:png,capturedAt:screenshotTime,captured:Date(),sourceActionId:id))
             emit(["type":"artifact","action_id":id,"kind":"screenshot","status":"captured","capturedAt":screenshotTime,"bytes":png.base64EncodedString(),"metadata":["mime_type":"image/png","window_id":window.windowID,"width":image.width,"height":image.height,"phase":"after","selection":"unique_ax_focused_window_bounds_match","overlay_supported":false]])
             screenshotEmitted = true
-            let request = VNRecognizeTextRequest(); request.recognitionLevel = .accurate; request.recognitionLanguages = ["en-US","zh-Hans"]; try VNImageRequestHandler(cgImage:image).perform([request]); let blocks = (request.results ?? []).compactMap { result -> [String:Any]? in guard let candidate = result.topCandidates(1).first else { return nil }; return ["text":candidate.string,"confidence":candidate.confidence,"bounds":[result.boundingBox.origin.x,result.boundingBox.origin.y,result.boundingBox.width,result.boundingBox.height]] }
-            emit(["type":"artifact","action_id":id,"kind":"ocr","status":"captured","capturedAt":iso(),"payload":["blocks":blocks,"engine":"Apple Vision","coordinate_space":"normalized_bottom_left"]])
-        } catch { if !screenshotEmitted { missing(id,"screenshot","unavailable",String(describing:error)) }; missing(id,"ocr","unavailable","capture_or_ocr_failed") } }
+            missing(id,"ocr","unavailable","ocr_disabled")
+        } catch { if !screenshotEmitted { missing(id,"screenshot","unavailable",String(describing:error)) }; missing(id,"ocr","unavailable","ocr_disabled") } }
     }
 }
 if CommandLine.arguments.contains("--prepare-evidence") { prepareEvidence(); exit(0) }

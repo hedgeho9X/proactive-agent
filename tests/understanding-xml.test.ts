@@ -99,7 +99,6 @@ test("XML 分区保持固定层级，动态文本不能闭合或伪造指令标�
     "clicked_element",
     "focused_element",
     "ax_context",
-    "ocr",
     "screenshot_metadata",
   ]) {
     expect(prompt.indexOf(`<${tag}>`)).toBeGreaterThan(
@@ -110,7 +109,7 @@ test("XML 分区保持固定层级，动态文本不能闭合或伪造指令标�
     );
     expect(() => block(prompt, tag)).not.toThrow();
   }
-  expect(block(prompt, "ocr")).toEqual(input.ocr);
+  expect(prompt).not.toContain("<ocr>");
   expect(block(prompt, "hardware_event")).toHaveProperty("note", hostile);
   expect(JSON.stringify(block(prompt, "focused_element"))).toContain(
     JSON.stringify(hostile).slice(1, -1),
@@ -159,12 +158,13 @@ test("点击目标与焦点独立，其他 AX 文字保留且原始重复树不�
   const clicked = JSON.stringify(block(prompt, "clicked_element"));
   const focused = JSON.stringify(block(prompt, "focused_element"));
   const context = JSON.stringify(block(prompt, "ax_context"));
-  expect(clicked).toContain("click-node");
-  expect(clicked).not.toContain("focus-node");
-  expect(focused).toContain("focus-node");
-  expect(focused).not.toContain("click-node");
+  expect(clicked).toContain("Open");
+  expect(clicked).not.toContain("文件名");
+  expect(focused).toContain("文件名");
+  expect(focused).toContain("合成项目");
+  expect(focused).not.toContain("Open");
   expect(context).toContain("当前目录");
-  expect(context).toContain("合成目录");
+  expect(context).not.toContain("合成目录");
   expect(context).toContain("路径信息");
   expect(prompt).not.toContain("raw-node-marker");
   expect(prompt).not.toContain("fixture-secret");

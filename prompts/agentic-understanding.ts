@@ -16,8 +16,7 @@ export const understandingToolDescriptions = {
     "读取指定动作的语义细节、硬件事件和证据状态，不触发重新理解。",
   get_action_image:
     "查看指定动作当时保存的原始截图，不是当前实时桌面；必须与采集时间一起解释。",
-  get_action_ax: "读取指定动作的相关控件、文字与焦点证据，AX内容可能过时。",
-  get_action_ocr: "读取指定动作截图关联的 OCR；未采集时返回 unavailable。",
+  get_action_ax: "读取指定动作去重后的 AX title/description、焦点区域与独立草稿证据；不是完整原始树，内容可能过时。",
   get_app_info: "查询当前可见历史涉及的应用用途；背景不是当前行为证据。",
   web_search:
     "搜索公开背景与来源。只在本地证据不足时使用，不把搜索结果当作用户当前行为。",

@@ -156,22 +156,8 @@ export class EvidenceSession {
           ),
         ),
       };
-    if (part === "ocr") {
-      let ocr =
-        result?.debug?.promptInput?.ocr ??
-        item.artifacts?.ocr?.payload?.content;
-      if (!ocr && result?.debug?.userPrompt) {
-        try {
-          ocr = JSON.parse(result.debug.userPrompt).artifacts?.ocr?.payload
-            ?.content;
-        } catch {}
-      }
-      return {
-        action_id: id,
-        status: ocr ? "available" : "unavailable",
-        ...bounded(ocr),
-      };
-    }
+    if (part === "ocr")
+      return { action_id: id, status: "unavailable", reason: "ocr_disabled" };
     const image = item.artifacts?.screenshot?.bytes;
     if (!image || image.length > 12 * 1024 * 1024)
       return { status: "unavailable", action_id: id };

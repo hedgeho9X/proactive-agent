@@ -43,7 +43,7 @@ test("动态数据不能通过关闭标签或实体插入指令", () => {
   expect(xmlData(null)).toBe("null");
 });
 
-test("点击与焦点分开，保留URL与非焦点文字，不复制原始树和失效矩形", () => {
+test("点击与焦点分开，普通 AX 仅保留文字线索，不复制原始树和失效矩形", () => {
   const ax = {
     nodes: [
       { node_id: "clicked", title: "联系人", clicked: true },
@@ -69,16 +69,17 @@ test("点击与焦点分开，保留URL与非焦点文字，不复制原始树�
   };
   const original = JSON.stringify({ ax, image });
   const result = projectVisualEvidence(ax, image, "搜索");
-  expect(result.clickedElement.nodes.map((node) => node.node_id)).toEqual([
-    "clicked",
+  expect(result.clickedElement.nodes.map((node) => node.title)).toEqual([
+    "联系人",
   ]);
-  expect(result.focusedElement.nodes.map((node) => node.node_id)).toEqual([
-    "focus",
+  expect(result.focusedElement.nodes.map((node) => node.title)).toEqual([
+    "搜索",
   ]);
   expect(result.clickedElement.region?.rect).toBeUndefined();
-  expect(
-    result.axContext.nodes.find((node) => node.node_id === "other")?.url,
-  ).toBe("https://example.test/paper");
+  expect(result.axContext.nodes).toContainEqual({ title: "页面标题" });
+  expect(JSON.stringify(result.axContext)).not.toContain(
+    "https://example.test/paper",
+  );
   expect(JSON.stringify(result)).not.toContain("debug-noise");
   expect(JSON.stringify(result)).not.toContain("隐藏内容");
   expect(JSON.stringify({ ax, image })).toBe(original);

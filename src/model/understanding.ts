@@ -43,7 +43,6 @@ function promptVariables(input: UnderstandingInput) {
     evidence: input.evidence,
     axTree: input.artifacts.ax?.payload?.content ?? null,
     focusTitle: input.artifacts.ax?.payload?.content?.focus_title ?? null,
-    ocr: input.artifacts.ocr?.payload?.content ?? null,
     screenshot: input.artifacts.screenshot?.payload?.content ?? null,
     view: input.view,
   };
@@ -120,7 +119,12 @@ export function projectUnderstanding(
   }
   // 模型只接收当前截图，防止将两帧误解为同一时刻。
   delete artifacts.screenshot_before;
-  return { ...input, artifacts };
+  delete artifacts.ocr;
+  return {
+    ...input,
+    artifacts,
+    evidence: input.evidence.filter((item: any) => item.kind !== "ocr"),
+  };
 }
 /** 构建包含模型、Prompt 和证据哈希的缓存清单，不保存凭证。 */
 export function inputManifest(

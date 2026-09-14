@@ -1,7 +1,7 @@
+/** 只为既有截图添加区域标记，不执行 OCR 或重新抓屏。 */
 import AppKit
-import Vision
 
-// 只处理父进程提供的既有截图，不再次抓屏，确保 OCR 与标注对应同一帧。
+/** 输出与原截图同尺寸的标注 PNG。 */
 func prepareEvidence() {
     guard let line = readLine(), let json = line.data(using:.utf8), let input = try? JSONSerialization.jsonObject(with:json) as? [String:Any], let encoded = input["data"] as? String, let data = Data(base64Encoded:encoded), let rep = NSBitmapImageRep(data:data), let image = rep.cgImage else { emit(["error":"invalid_source_image"]); return }
     let width = CGFloat(image.width), height = CGFloat(image.height)
@@ -19,15 +19,5 @@ func prepareEvidence() {
         context.strokeEllipse(in:CGRect(x:width*left/100-7,y:height*(1-top/100)-7,width:14,height:14))
     }
     guard let annotated = context.makeImage(), let png = NSBitmapImageRep(cgImage:annotated).representation(using:.png,properties:[:]) else { emit(["error":"png_encoding_failed"]);return }
-    var ocr: [String:Any]
-    do {
-        let request = VNRecognizeTextRequest(); request.recognitionLevel = .accurate; request.recognitionLanguages = ["en-US","zh-Hans"]
-        try VNImageRequestHandler(cgImage:image).perform([request])
-        let blocks = (request.results ?? []).compactMap { item -> [String:Any]? in
-            guard let candidate = item.topCandidates(1).first else { return nil }
-            return ["text":candidate.string,"confidence":candidate.confidence,"bounds":[item.boundingBox.minX,item.boundingBox.minY,item.boundingBox.width,item.boundingBox.height]]
-        }
-        ocr = ["status":"captured","blocks":blocks,"engine":"Apple Vision","coordinate_space":"normalized_bottom_left"]
-    } catch { ocr = ["status":"unavailable","reason":"ocr_failed"] }
-    emit(["data":png.base64EncodedString(),"ocr":ocr,"annotationVersion":1])
+    emit(["data":png.base64EncodedString(),"annotationVersion":1])
 }

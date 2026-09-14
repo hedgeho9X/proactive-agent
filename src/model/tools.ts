@@ -91,7 +91,6 @@ export function registerCapabilities(
   );
   for (const [name, part, description] of [
     ["get_ax_tree", "ax", toolPrompts.get_ax_tree],
-    ["get_ocr_content", "ocr", toolPrompts.get_ocr_content],
   ] as const)
     tool(
       name,

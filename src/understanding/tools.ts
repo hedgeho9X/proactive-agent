@@ -140,7 +140,6 @@ export function createUnderstandingTools(
     ["get_action_detail", "detail"],
     ["get_action_image", "image"],
     ["get_action_ax", "ax"],
-    ["get_action_ocr", "ocr"],
   ] as const)
     add(
       name,
