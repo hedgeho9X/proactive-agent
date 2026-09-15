@@ -7,6 +7,7 @@ export function axObservation(snapshot: any) {
   const id = snapshot.snapshotId;
   const at = snapshot.capturedAt ?? event.occurredAt ?? snapshot.savedAt;
   const protectedEvidence =
+    snapshot.readingContext?.status === "excluded" ||
     snapshot.screenshot?.status === "excluded" ||
     snapshot.nodes?.some((node: any) => node.protected);
   const text = (node: any, name: string) =>
@@ -77,7 +78,10 @@ export function axObservation(snapshot: any) {
         slot: "ax",
         status: protectedEvidence
           ? "excluded"
-          : nodes.length || snapshot.editingEvidence
+          : nodes.length ||
+              snapshot.editingEvidence ||
+              snapshot.readingContext?.selectedText ||
+              snapshot.readingContext?.context
             ? "captured"
             : "unavailable",
         reason: nodes.length ? null : "ax_unavailable",
@@ -109,7 +113,11 @@ export function axObservation(snapshot: any) {
     ],
     artifacts: {
       ax:
-        !protectedEvidence && (nodes.length || snapshot.editingEvidence)
+        !protectedEvidence &&
+        (nodes.length ||
+          snapshot.editingEvidence ||
+          snapshot.readingContext?.selectedText ||
+          snapshot.readingContext?.context)
           ? artifact("ax", {
               nodes: filtered.normalized,
               raw_nodes: snapshot.nodes,
@@ -123,6 +131,7 @@ export function axObservation(snapshot: any) {
               focus_title_reliability: "辅助线索，可能过时或指错控件",
               context: filtered,
               editing_evidence: snapshot.editingEvidence ?? null,
+              reading_context: snapshot.readingContext ?? null,
               coverage: {
                 partial: !!snapshot.partial,
                 timing: snapshot.timing,

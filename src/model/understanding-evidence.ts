@@ -1,4 +1,5 @@
 /** 将原始 AX 投影为少量文字线索；输入框正文独立保留，原始历史不变。 */
+import { readingEvidence } from "./reading-evidence.ts";
 
 /** 将未知证据收窄为对象。 */
 function object(value: unknown): Record<string, any> {
@@ -86,6 +87,7 @@ export function projectVisualEvidence(
   );
   const regions = object(image.regions ?? ax.regions);
   return {
+    readingContext: readingEvidence(ax, image),
     clickedElement: {
       nodes: compact(nodes.filter((node) => node.clicked === true)),
       region: region(regions.click),
