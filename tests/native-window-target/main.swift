@@ -36,3 +36,13 @@ precondition(!isOwnClick(windows:[dock,a],point:ownPoint,selected:dock,hitPid:63
 precondition(!isOwnClick(windows:[dock,a],point:ownPoint,selected:dock,hitPid:nil,nativePid:639,ownPid:42,selectedIsDock:true))
 precondition(!isOwnClick(windows:[other,a],point:ownPoint,selected:other,hitPid:nil,nativePid:42,ownPid:42,selectedIsDock:false))
 print("PASS")
+
+// 微信 AX 不可用：覆盖层下的窗口、原生目标和前台一致才接受。
+precondition(resolveDockClick([dock,a,b],point:ownPoint,dockPid:639,hitPid:nil,nativePid:42,foregroundPid:42)?.id == a.id)
+precondition(resolveDockClick([dock,a,b],point:ownPoint,dockPid:639,hitPid:nil,nativePid:43,foregroundPid:42) == nil)
+precondition(resolveDockClick([dock,a,b],point:ownPoint,dockPid:639,hitPid:nil,nativePid:42,foregroundPid:43) == nil)
+precondition(resolveDockClick([dock,a,b],point:ownPoint,dockPid:639,hitPid:639,nativePid:42,foregroundPid:42)?.id == dock.id)
+precondition(resolveDockClick([dock,a,b],point:ownPoint,dockPid:639,hitPid:42,nativePid:43,foregroundPid:43)?.id == a.id)
+let overlay = CaptureWindowTarget(id:99,pid:99,frame:a.frame,layer:10,source:"fixture")
+precondition(resolveDockClick([dock,overlay,a],point:ownPoint,dockPid:639,hitPid:42,nativePid:42,foregroundPid:42) == nil)
+precondition(resolveDockClick([dock],point:ownPoint,dockPid:639,hitPid:nil,nativePid:42,foregroundPid:42) == nil)

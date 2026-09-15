@@ -45,19 +45,25 @@ final class InputWatch {
         if type != .keyDown {
             // 此事件阶段的 target PID 可能仍是旧前台，只作诊断，不过滤真实点击目标。
             lockedWindow = windows.flatMap { clickedWindow($0,point:event.location) }
+            let system = AXUIElementCreateSystemWide(); AXUIElementSetMessagingTimeout(system,0.005)
+            var hit: AXUIElement?
+            if AXUIElementCopyElementAtPosition(system,Float(event.location.x),Float(event.location.y),&hit) == .success, let hit {
+                var actual: pid_t = 0
+                if AXUIElementGetPid(hit,&actual) == .success, actual > 0 { hitTestPid = actual }
+            }
+            if let geometric = lockedWindow,
+               NSRunningApplication(processIdentifier:geometric.pid)?.bundleIdentifier == "com.apple.dock" {
+                lockedWindow = resolveDockClick(windows ?? [],point:event.location,dockPid:geometric.pid,
+                    hitPid:hitTestPid,nativePid:nativePid,foregroundPid:target?.processIdentifier)
+                if lockedWindow == nil { targetError = "dock_overlay_target_unresolved" }
+            }
             if let window = lockedWindow {
                 if let owner = NSRunningApplication(processIdentifier:window.pid) { target = owner; targetBasis = window.source }
                 else { lockedWindow = nil; targetError = "clicked_window_owner_unavailable" }
-                // 有可读 AX 时交叉核对，透明/点击穿透窗口冲突时明确报错，不猜测。
-                let system = AXUIElementCreateSystemWide(); AXUIElementSetMessagingTimeout(system,0.005)
-                var hit: AXUIElement?
-                if AXUIElementCopyElementAtPosition(system,Float(event.location.x),Float(event.location.y),&hit) == .success, let hit {
-                    var actual: pid_t = 0
-                    if AXUIElementGetPid(hit,&actual) == .success { hitTestPid = actual }
-                    if actual > 0 && actual != window.pid { targetError = "click_window_owner_ambiguous" }
-                }
+                if let actual = hitTestPid, actual != window.pid { targetError = "click_window_owner_ambiguous" }
+            } else if targetError == nil {
+                targetError = windows == nil ? "window_server_unavailable":"no_window_at_click"
             }
-            else { targetError = windows == nil ? "window_server_unavailable":"no_window_at_click" }
             if isOwnClick(windows:windows ?? [],point:event.location,selected:lockedWindow,
                           hitPid:hitTestPid,nativePid:nativePid,ownPid:getppid(),
                           selectedIsDock:target?.bundleIdentifier == "com.apple.dock") { return }

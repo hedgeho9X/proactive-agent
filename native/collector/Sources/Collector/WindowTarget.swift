@@ -52,6 +52,25 @@ func clickedWindow(_ windows: [CaptureWindowTarget], point: CGPoint) -> CaptureW
     target.source = "mouse_down_window_server_hit"; return target
 }
 
+/** Dock 的几何覆盖层不代表点击接收者；只在独立身份与最前非 Dock 窗口一致时穿透。 */
+func resolveDockClick(_ windows: [CaptureWindowTarget], point: CGPoint, dockPid: pid_t,
+                      hitPid: pid_t?, nativePid: Int64, foregroundPid: pid_t?) -> CaptureWindowTarget? {
+    let hits = windows.filter { $0.frame.contains(point) }
+    guard var dock = hits.first, dock.pid == dockPid else { return nil }
+    if hitPid == dockPid { dock.source = "mouse_down_dock_ax_hit"; return dock }
+    guard var candidate = hits.first(where: { $0.pid != dockPid }) else { return nil }
+    if let hitPid, hitPid > 0 {
+        guard candidate.pid == hitPid else { return nil }
+        candidate.source = "mouse_down_dock_overlay_ax_hit"
+    } else {
+        // 原生目标可能是旧前台：同时要求几何最前窗口、当前前台和原生目标一致。
+        guard candidate.layer == 0, candidate.pid == foregroundPid,
+              Int64(candidate.pid) == nativePid else { return nil }
+        candidate.source = "mouse_down_dock_overlay_corroborated"
+    }
+    return candidate
+}
+
 /** 优先使用 AX 命中身份；AX 缺失时，仅在 Dock 遮罩、原生目标和最前普通窗口共同指向自身时排除。 */
 func isOwnClick(windows: [CaptureWindowTarget], point: CGPoint, selected: CaptureWindowTarget?,
                 hitPid: pid_t?, nativePid: Int64, ownPid: pid_t, selectedIsDock: Bool) -> Bool {
