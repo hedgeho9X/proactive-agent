@@ -1,3 +1,5 @@
+/** 将锁定窗口的截图、完整 AX 诊断树和定向阅读证据合并；不同采样分别保留时间。 */
+/** 对锁定窗口采集截图、局部阅读正文与 AX 树，分别保留来源、时序和失败原因。 */
 import AppKit
 import ApplicationServices
 import ScreenCaptureKit
@@ -125,6 +127,14 @@ func inspectAX(_ pid: pid_t, trigger: [String:Any]? = nil, progress: @escaping @
     let window = axWindowForTarget(application,target)
     let (focusError, focusValue) = read(application, kAXFocusedUIElementAttribute)
     let focus = focusValue.flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil }
+    var readingContext: [String:Any] = ["status":"unavailable","reason":"target_ax_window_unavailable"]
+    if let window {
+        progress(["component":"ax","stage":"reading_context","state":"running","at":preciseTimestamp()])
+        let reader = ReadingContextReader(source:NativeReadingAXSource(window:window))
+        readingContext = reader.capture(focus:focus,click:probeClickRegion(pid,trigger).element)
+        protectedFound = protectedFound || reader.protectedFound
+        progress(["component":"ax","stage":"reading_context","state":"complete","at":preciseTimestamp()])
+    }
     // 焦点优先读取，完整树与截图任务并行；分别保存实际采样时间。
     if let window {
         if let focus, let owner = attribute(focus,kAXWindowAttribute), CFGetTypeID(owner) == AXUIElementGetTypeID(), CFEqual(owner,window) { visit(focus,parent:nil,path:"focus",depth:0,walkChildren:false) }
@@ -164,9 +174,16 @@ func inspectAX(_ pid: pid_t, trigger: [String:Any]? = nil, progress: @escaping @
     let foregroundAfter = await foregroundState()
     if trigger != nil && foregroundAfter["pid"] as? Int != Int(pid) { warnings.append("foreground_changed_during_capture_target_kept") }
     let hasImage = screenshot["status"] as? String == "captured" && screenshot["data"] as? String != nil
+    // 局部 AX 也必须与最终图片对应；窗口身份或隐私校验失败时不残留可读正文。
+    if !hasImage || aligned != true {
+        let excluded = protectedFound || screenshot["status"] as? String == "excluded"
+        let reason = !hasImage ? (screenshot["reason"] as? String ?? "screenshot_unavailable") : aligned == false ? "ax_window_mismatch_discarded":"ax_window_unverified"
+        readingContext = ["status":excluded ? "excluded":"unavailable","reason":reason,"discarded":true,"diagnostics":readingContext["diagnostics"] as Any? ?? NSNull()]
+    }
     let diagnostic: [String:Any] = ["target":target.json,"foregroundBefore":foregroundBefore,"foregroundAfter":foregroundAfter,"warnings":warnings,"windowListCode":windowError.rawValue,"focusCode":focusError.rawValue,"axWindowResolved":window != nil,"stage":hasImage ? "complete":(screenshot["stage"] as? String ?? "screenshot"),"reason":screenshot["reason"] as Any? ?? NSNull()]
     let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime,.withFractionalSeconds]
     var output: [String:Any] = ["captureSchema":5,"captureStatus":hasImage ? "captured":"failed","captureDiagnostics":diagnostic,"alignment":["sameWindow":aligned == true ? true as Any:NSNull(),"axDiscarded":aligned == false],"axRootScope":window == nil ? "unavailable" : "window","timing":["eventAt":trigger?["occurredAt"] as Any? ?? NSNull(),"requestReceivedAt":preciseTimestamp(began),"axStartedAt":axStartedAt,"axCompletedAt":axCompletedAt,"screenshotRequestedAt":screenshot["requestedAt"] as Any? ?? NSNull(),"screenshotCompletedAt":screenshot["capturedAt"] as Any? ?? NSNull(),"nonAtomic":true],"treeFocusId":focus.map { identifier($0) } as Any? ?? NSNull(),"clickedId":clickedId as Any? ?? NSNull(),"appLaunchedAt":app.launchDate.map { formatter.string(from:$0) } ?? "","windowId":windowId as Any? ?? NSNull(),"pid":Int(pid), "app":app.localizedName ?? "", "bundleId":app.bundleIdentifier ?? "", "capturedAt":formatter.string(from:began), "elapsedMs":Int(Date().timeIntervalSince(began)*1000), "nodes":nodes, "partial":partial, "limits":["nodes":800,"depth":20,"milliseconds":3000,"textCharacters":8000], "windowCode":windowError.rawValue, "focusCode":focusError.rawValue, "focusId":screenshotFocusId as Any? ?? NSNull(), "permissions":permissions(), "screenshot":screenshot]
     if !hasImage { output["error"] = screenshot["reason"] as? String ?? "screenshot_missing" }
+    output["readingContext"] = readingContext
     return output
 }
