@@ -46,8 +46,8 @@ test("理解 Agent 先读历史详情再生成信息充分的标题，工具结�
           : {
               role: "assistant",
               content: JSON.stringify({
-                action_title: "查看论文A的记忆检索方法",
-                action_detail: "当前页面讨论按任务检索交互历史。",
+                description: "查看论文A的记忆检索方法",
+                detail: "当前页面讨论按任务检索交互历史。",
               }),
             };
       return Response.json({
@@ -85,7 +85,7 @@ test("理解 Agent 先读历史详情再生成信息充分的标题，工具结�
         },
       },
     }),
-    result: () => ({ result: { action_detail: "论文A：基于任务的记忆检索" } }),
+    result: () => ({ result: { detail: "论文A：基于任务的记忆检索" } }),
   };
   const service = new UnderstandingService(root, () => {}, {
     createSession: () => EvidenceSession.create(source, anchor),
@@ -122,7 +122,7 @@ test("理解 Agent 先读历史详情再生成信息充分的标题，工具结�
     expect(JSON.stringify(requests[1].messages)).toContain(
       Buffer.from("historical-image").toString("base64"),
     );
-    expect(result.result.action_title).toBe("查看论文A的记忆检索方法");
+    expect(result.result.description).toBe("查看论文A的记忆检索方法");
     expect(result.usage.totalTokens).toBe(60);
     const trace = await service.trace("current");
     expect(trace.steps).toHaveLength(2);
@@ -159,8 +159,8 @@ test("连续补证到第四步时禁止工具并收敛输出", async () => {
               ? {
                   role: "assistant",
                   content: JSON.stringify({
-                    action_title: "查看论文方法",
-                    action_detail: "已获取本次可用证据。",
+                    description: "查看论文方法",
+                    detail: "已获取本次可用证据。",
                   }),
                 }
               : {
@@ -207,7 +207,7 @@ test("连续补证到第四步时禁止工具并收敛输出", async () => {
     expect(requests).toHaveLength(4);
     expect(requests[3].tool_choice).toBe("none");
     expect(result.debug.steps).toHaveLength(4);
-    expect(result.result.action_title).toBe("查看论文方法");
+    expect(result.result.description).toBe("查看论文方法");
   } finally {
     await service.close();
     server.stop(true);

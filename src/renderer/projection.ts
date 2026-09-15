@@ -1,3 +1,4 @@
+/** 将运行时事件投影为可读列表，不改写原始消息或证据。 */
 export interface StreamRow {
   id: string;
   time: string;
@@ -44,6 +45,7 @@ export function concise(value: unknown): string {
     return value == null ? "" : String(value);
   const item = value as Record<string, any>;
   for (const key of [
+    "description",
     "action_title",
     "statement",
     "understanding",

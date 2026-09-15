@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { attributeText } from "./ax-attributes.ts";
 import { AITrace } from "./ai-trace.tsx";
 import { CaptureStatus } from "./capture-status.tsx";
+import { readingEvidence } from "../model/reading-evidence.ts";
+import { ReadingContextPanel } from "./reading-context.tsx";
 
 /** 读取当前记录，在折叠区保留 AX、采集诊断与原始数据。 */
 export function AXRecordDetails({
@@ -21,7 +23,12 @@ export function AXRecordDetails({
   aiReason?: string;
   recording: boolean;
   onRemoved: () => void;
-  summary?: { action_title?: string; action_detail?: string };
+  summary?: {
+    description?: string;
+    detail?: string;
+    action_title?: string;
+    action_detail?: string;
+  };
 }) {
   const [snapshot, setSnapshot] = useState<any>(null);
   const [nodeId, setNodeId] = useState("");
@@ -54,6 +61,24 @@ export function AXRecordDetails({
     };
   }, [recordId, status]);
   const node = snapshot?.nodes.find((node: any) => node.id === nodeId);
+  const reading = snapshot
+    ? readingEvidence(
+        {
+          raw_nodes: snapshot.nodes,
+          nodes: snapshot.nodes.map((item: any) => ({
+            node_id: item.id,
+            focused: item.id === snapshot.focusId,
+            protected: item.protected,
+          })),
+          reading_context: snapshot.readingContext,
+          coverage: {
+            timing: snapshot.timing,
+            diagnostics: snapshot.captureDiagnostics,
+          },
+        },
+        snapshot.screenshot,
+      )
+    : null;
   /** 执行记录复制或删除，并反馈失败状态。 */
   async function act(method: string) {
     setBusy(true);
@@ -120,6 +145,7 @@ export function AXRecordDetails({
           trigger: snapshot?.trigger,
           ax: snapshot ? (
             <>
+              <ReadingContextPanel value={reading} />
               <input
                 className="mb-3 w-full rounded border bg-background p-2 text-sm"
                 aria-label="筛选 AX 节点"

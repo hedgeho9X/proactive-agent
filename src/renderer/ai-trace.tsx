@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { DetailDisclosure } from "./detail-disclosure.tsx";
 import { FocusOverlay } from "./focus-overlay.tsx";
 import { UnderstandingChain } from "./understanding-chain.tsx";
+import { understandingResult } from "../model/understanding-result.ts";
+import { ReadingContextPanel } from "./reading-context.tsx";
 /** 加载单条理解追踪，历史追踪过期时仍展示持久化摘要。 */
 export function AITrace({
   id,
@@ -16,7 +18,12 @@ export function AITrace({
   id: string;
   status?: string;
   reason?: string;
-  summary?: { action_title?: string; action_detail?: string };
+  summary?: {
+    description?: string;
+    detail?: string;
+    action_title?: string;
+    action_detail?: string;
+  };
   panels?: {
     screenshot?: any;
     trigger?: any;
@@ -62,16 +69,20 @@ export function AITrace({
       if (timer) clearInterval(timer);
     };
   }, [id, status]);
+  const result = understandingResult(trace?.output ?? summary);
   return (
     <div className="flex flex-col gap-3" aria-label="AI 理解追踪">
-      {(trace?.output ?? summary)?.action_title ? (
+      {result.description ? (
         <div className="flex flex-col gap-2">
-          <p className="font-medium">
-            {(trace?.output ?? summary).action_title}
-          </p>
-          <p className="whitespace-pre-wrap text-sm">
-            {(trace?.output ?? summary).action_detail}
-          </p>
+          <p className="font-medium">{result.description}</p>
+          {result.detail && (
+            <section aria-label="详细上下文" className="flex flex-col gap-1">
+              <p className="text-xs text-muted-foreground">详细上下文</p>
+              <p className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-sm">
+                {result.detail}
+              </p>
+            </section>
+          )}
         </div>
       ) : (
         <p className="text-sm text-muted-foreground" role="status">
@@ -92,6 +103,10 @@ export function AITrace({
         <p role="alert" className="text-sm text-destructive">
           {trace?.error || error || reason}
         </p>
+      )}
+      {(trace?.contextEvidence?.selectedText ||
+        trace?.contextEvidence?.context) && (
+        <ReadingContextPanel value={trace.contextEvidence} />
       )}
       {status === "failed" && (
         <Button

@@ -7,7 +7,7 @@ macOS 实验项目，基于 Electron、Swift、Vercel AI SDK 和 DeepSeek Harnes
 ## 功能
 
 - 采集窗口截图、AX（辅助功能树）和输入活动，保留原始证据。
-- 将操作理解为 Action title / detail；编辑过程持续记录，不逐条触发理解。
+- 将操作理解为 description / detail，描述当前活动并保留相关正文上下文；编辑过程持续记录，不逐条触发理解。
 - 查看实际模型输入、标注截图和 Agent Trace，追踪工具调用与错误。
 - 主 Agent 接收行为轨迹、按 ID 查看证据，通过桌面弹幕提出建议。
 
@@ -38,6 +38,7 @@ bun run package:mac # 打包 macOS 应用
 中文 Prompt 集中在 [prompts/](prompts/README.md)，可以独立修改。
 
 模型输入使用标注截图、精简 AX 文字和独立草稿，不生成 OCR；原始 AX 留在本地供调试。见 [证据精简](docs/EVIDENCE-COMPACTION.md)。
+阅读操作额外保留选中文字与局部正文，明确来源、时间、截断及选区关联，不宣称取得整条回复。见 [阅读取证](docs/READING-CONTEXT.md)。
 
 ## 数据与边界
 

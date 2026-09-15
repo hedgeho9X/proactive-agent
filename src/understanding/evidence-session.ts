@@ -1,6 +1,7 @@
 /** 为一次理解建立有时间边界的只读证据视图，不触发采集或历史重理解。 */
 import { resolveAppInfo } from "../model/app-info.ts";
 import { projectVisualEvidence } from "../model/understanding-evidence.ts";
+import { understandingResult } from "../model/understanding-result.ts";
 
 /** 索引行只包含查询所需的元数据与摘要，不携带图片或完整 AX。 */
 export interface EvidenceRow {
@@ -11,6 +12,7 @@ export interface EvidenceRow {
   session?: string;
   window_id?: number;
   title?: string;
+  description?: string;
   status?: string;
 }
 /** 宿主提供本应用的数据访问，工具服务不依赖 SQLite 或 Electron。 */
@@ -55,7 +57,10 @@ export class EvidenceSession {
           row.sequence < anchor.sequence
         );
       })
-      .map((row) => structuredClone(row));
+      .map((row): EvidenceRow => {
+        const { title, ...copy } = structuredClone(row);
+        return { ...copy, description: copy.description ?? title };
+      });
     if (!rows.some((row) => row.id === anchor.id))
       rows.push(structuredClone(anchor));
     rows.sort(
@@ -67,7 +72,7 @@ export class EvidenceSession {
     return new EvidenceSession(source, anchor, rows);
   }
 
-  /** 返回标题级索引，最多 50 条，支持应用、窗口和时间下界过滤。 */
+  /** 返回活动描述索引，最多 50 条，支持应用、窗口和时间下界过滤。 */
   list({
     limit = 10,
     offset = 0,
@@ -100,7 +105,7 @@ export class EvidenceSession {
     };
   }
 
-  /** 预载全局及同应用近十条标题，去重后保持时间顺序。 */
+  /** 预载全局及同应用近十条活动描述，去重后保持时间顺序。 */
   initial() {
     const global = this.list().records;
     const same = this.anchor.app.bundle_id
@@ -134,13 +139,24 @@ export class EvidenceSession {
     )
       return { status: "excluded", action_id: id };
     // 未完成理解的记录不等待其他工作线程，避免理解队列互相阻塞。
-    const result = row.title ? this.source.result(id) : null;
+    const result = row.description || row.title ? this.source.result(id) : null;
     if (part === "detail")
       return {
         action_id: id,
         ...bounded({
+          contextEvidence:
+            result?.contextEvidence ??
+            projectVisualEvidence(
+              item.artifacts?.ax?.payload?.content,
+              item.artifacts?.screenshot?.payload?.content,
+              null,
+            ).readingContext,
           ...row,
-          detail: result?.result?.action_detail ?? null,
+          description:
+            understandingResult(result?.result).description ||
+            row.description ||
+            null,
+          detail: understandingResult(result?.result).detail || null,
           event: item.action,
           evidence: item.evidence,
         }),

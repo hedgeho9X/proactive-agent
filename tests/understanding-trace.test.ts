@@ -26,9 +26,8 @@ test("理解追踪保留真实中文输入、图片、输出；改 Prompt 不复
               content: invalid
                 ? '{"wrong":"field"}'
                 : JSON.stringify({
-                    action_title: "在论文页面按下空格",
-                    action_detail:
-                      "页面显示论文名称；当前证据不能确认输入或提交。",
+                    description: "在论文页面按下空格",
+                    detail: "页面显示论文名称；当前证据不能确认输入或提交。",
                   }),
             },
           },
@@ -81,7 +80,7 @@ test("理解追踪保留真实中文输入、图片、输出；改 Prompt 不复
   try {
     const result: any = await service.summarize(input, config);
     const trace = await service.trace("a");
-    expect(result.result.action_title).toBe("在论文页面按下空格");
+    expect(result.result.description).toBe("在论文页面按下空格");
     expect(trace.systemPrompt).toBe(requests[0].messages[0].content);
     expect(trace.userPrompt).toBe(requests[0].messages[1].content[0].text);
     expect(trace.userPrompt).toContain("<ax_context>");
@@ -138,7 +137,7 @@ test("动作提示区分右键，轨迹只含摘要和 ID；标注忽略不可�
   const line = trajectoryLine(
     "ax-test",
     { occurred_at: "2026-09-08T04:12:13.456Z" },
-    { action_title: "查看论文", action_detail: "论文 A\nURL：example.com" },
+    { description: "查看论文", detail: "论文 A\nURL：example.com" },
   );
   expect(line).toContain("26-09-08");
   expect(line).toContain(".456]");

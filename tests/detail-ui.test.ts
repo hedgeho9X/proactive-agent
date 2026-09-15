@@ -42,3 +42,19 @@ test("等待和失败状态始终可见", () => {
   expect(failed).toContain("fixture_error");
   expect(failed).toContain("重试处理");
 });
+
+test("description/detail 新字段在详情显示，较长上下文可阅读而非被切断", () => {
+  const html = renderToStaticMarkup(
+    React.createElement(AITrace, {
+      id: "fixture",
+      status: "delivered",
+      summary: {
+        description: "在研究会话中查看反馈标记方案并选中一段说明",
+        detail: "相关回复的原文。".repeat(200),
+      },
+    }),
+  );
+  expect(html).toContain("查看反馈标记方案");
+  expect(html).toContain("详细上下文");
+  expect(html.match(/相关回复的原文。/g)).toHaveLength(200);
+});

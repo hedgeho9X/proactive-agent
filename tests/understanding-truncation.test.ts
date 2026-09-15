@@ -17,7 +17,7 @@ test("供应商 length 结束记录为截断，追踪保留实际输出", async 
         choices: [
           {
             index: 0,
-            message: { role: "assistant", content: '{"action_title":"未写完' },
+            message: { role: "assistant", content: '{"description":"未写完' },
             finish_reason: "length",
           },
         ],

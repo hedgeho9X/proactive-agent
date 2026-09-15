@@ -28,6 +28,8 @@ test("历史按时间及同采集会话序号限定，未知未来 ID 无法取�
   );
   expect(reads).toBe(0);
   expect(session.list().records).toHaveLength(10);
+  expect(session.list().records[0].description).toBe("标题");
+  expect(session.list().records[0].title).toBeUndefined();
   expect(
     session
       .list({ app: "app.a", limit: 50 })
@@ -40,6 +42,78 @@ test("历史按时间及同采集会话序号限定，未知未来 ID 无法取�
   const detail = await session.get("19", "detail");
   expect("content" in detail ? detail.content : "").toContain("细节");
   expect(reads).toBe(1);
+});
+
+test("新结果详情保持原文换行，索引只携带活动描述", async () => {
+  const previous = {
+    id: "previous",
+    time: new Date(1000).toISOString(),
+    app: {},
+    description: "查看测试回复",
+  };
+  const current = {
+    id: "current",
+    time: new Date(2000).toISOString(),
+    app: {},
+  };
+  const session = await EvidenceSession.create(
+    {
+      list: async () => [previous],
+      read: async () => ({ action: {}, evidence: [], artifacts: {} }),
+      result: () => ({
+        result: {
+          description: previous.description,
+          detail: "当前阅读第一段和第二段。",
+        },
+        contextEvidence: {
+          status: "partial",
+          context: {
+            text: "第一段原文\n第二段原文",
+            scope: "related_subtree",
+            truncated: true,
+          },
+        },
+      }),
+    },
+    current,
+  );
+  expect(session.initial()[0].description).toBe(previous.description);
+  const detail = await session.get("previous", "detail");
+  const content = JSON.parse("content" in detail ? detail.content : "{}");
+  expect(content.description).toBe(previous.description);
+  expect(content.detail).toBe("当前阅读第一段和第二段。");
+  expect(content.contextEvidence.context.text).toBe("第一段原文\n第二段原文");
+  expect(content.contextEvidence.context.truncated).toBe(true);
+});
+
+test("详情工具优先返回原文证据，超预算时明确截断而非静默丢失", async () => {
+  const anchor = {
+    id: "now",
+    time: new Date(1000).toISOString(),
+    app: {},
+    description: "查看合成消息",
+  };
+  const contextEvidence = { context: { text: "相关正文" }, status: "partial" };
+  const session = await EvidenceSession.create(
+    {
+      list: async () => [],
+      read: async () => ({
+        action: { metadata: "x".repeat(20000) },
+        evidence: [],
+      }),
+      result: () => ({
+        result: { description: anchor.description, detail: "相关正文的说明" },
+        contextEvidence,
+      }),
+    },
+    anchor,
+  );
+  const response = await session.get("now", "detail");
+  expect("content" in response && response.content).toStartWith(
+    '{"contextEvidence":',
+  );
+  expect("content" in response && response.content).toContain("相关正文");
+  expect("truncated" in response && response.truncated).toBe(true);
 });
 
 test("同毫秒只接收有可靠序号的前序事件，受保护证据不返回", async () => {

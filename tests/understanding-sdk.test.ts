@@ -38,8 +38,8 @@ for (const protocol of ["openai-compatible", "gemini"] as const) {
     const root = await mkdtemp(join(tmpdir(), "understanding-sdk-"));
     const requests: any[] = [];
     const answer = {
-      action_title: "点击测试按钮",
-      action_detail: "用户点击当前画面中的测试按钮。",
+      description: "在测试页面阅读多段说明后点击测试按钮。".repeat(5),
+      detail: "合成段落第一行。\n合成段落第二行。\n".repeat(100),
     };
     const server = Bun.serve({
       port: 0,
@@ -93,6 +93,20 @@ for (const protocol of ["openai-compatible", "gemini"] as const) {
     const service = new UnderstandingService(root, () => {});
     try {
       const input = fixtureInput();
+      const reading = {
+        status: "partial",
+        selectedText: { text: "合成选区", source: "AXSelectedText" },
+        context: {
+          text: "合成回复原文。",
+          source: "AXValue",
+          scope: "related_subtree",
+          truncated: true,
+          reason: "node_budget",
+        },
+      };
+      Object.assign(input.artifacts.ax.payload.content, {
+        reading_context: reading,
+      });
       const result: any = await service.summarize(
         input,
         {
@@ -104,6 +118,8 @@ for (const protocol of ["openai-compatible", "gemini"] as const) {
         "只描述当前动作，输出中文 JSON。",
       );
       expect(result.result).toEqual(answer);
+      expect(result.result.description.length).toBeGreaterThan(80);
+      expect(result.result.detail.length).toBeGreaterThan(1200);
       expect(result.usage).toMatchObject({
         inputTokens: 40,
         outputTokens: 12,
@@ -115,6 +131,10 @@ for (const protocol of ["openai-compatible", "gemini"] as const) {
       const trace = await service.trace("sdk-test");
       expect(trace.sdk).toBe("vercel-ai-sdk");
       expect(trace.image).toBe(input.artifacts.screenshot.bytes);
+      expect(result.contextEvidence).toMatchObject(reading);
+      expect(trace.contextEvidence).toEqual(result.contextEvidence);
+      expect(trace.userPrompt).toContain("合成回复原文。");
+      expect(result.result.detail).not.toContain("合成回复原文。");
       expect(trace.requestSettings).toEqual({
         maxRetries: 0,
         outputTokenLimit: "provider_default",
@@ -130,6 +150,10 @@ for (const protocol of ["openai-compatible", "gemini"] as const) {
           "data:image/png;base64," + trace.image,
         );
         expect(body.response_format.type).toBe("json_schema");
+        expect(body.response_format.json_schema.schema.required).toEqual([
+          "description",
+          "detail",
+        ]);
         expect(body.max_tokens).toBeUndefined();
       } else {
         expect(path).toBe("/v1beta/models/fixture-model:generateContent");

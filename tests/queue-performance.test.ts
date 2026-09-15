@@ -20,7 +20,7 @@ test("大型旧结果只投影一次，列表不读库，状态与重启后摘�
     try {
       const file=join(root,'queue.sqlite');
       let enabled=false;
-      const handlers={read:id=>({action:{action_id:id},evidence:[]}),canUnderstand:()=>enabled,canDeliver:()=>enabled,change:()=>{},understand:async()=>({result:{action_title:'新标题',action_detail:'新描述'},debug:{imageFile:'fixture.png'},large:'x'.repeat(1024*1024)}),deliver:async()=>{}};
+      const handlers={read:id=>({action:{action_id:id},evidence:[]}),canUnderstand:()=>enabled,canDeliver:()=>enabled,change:()=>{},understand:async()=>({result:{description:'新描述',detail:'新上下文'},debug:{imageFile:'fixture.png'},large:'x'.repeat(1024*1024)}),deliver:async()=>{}};
       let queue=new ActionQueue(file,handlers);
       await queue.close();
       const db=new DatabaseSync(file);
@@ -47,7 +47,8 @@ test("大型旧结果只投影一次，列表不读库，状态与重启后摘�
       const row=queue.list().at(-1);
       assert.equal(row.status,'delivered');
       assert.equal(row.attempts,1);
-      assert.equal(row.actionTitle,'新标题');
+      assert.equal(row.actionTitle,'新描述');
+      assert.equal(row.actionDetail,'新上下文');
       assert.equal(queue.result('new').large.length,1024*1024);
       assert.equal(initial.length,80);
       await queue.close();

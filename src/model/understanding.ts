@@ -31,6 +31,8 @@ import { usageOf, type ModelConfig } from "./gemini.ts";
 import { defaultPrompts } from "./prompts.ts";
 import { resolveAppInfo } from "./app-info.ts";
 import { buildUserPrompt } from "../../prompts/understanding.ts";
+import { type UnderstandingResult } from "./understanding-result.ts";
+import { projectVisualEvidence } from "./understanding-evidence.ts";
 export { actionHint } from "../../prompts/understanding.ts";
 
 /** 提取模板变量，不包含图片字节；同一组变量用于请求、缓存及追踪。 */
@@ -52,7 +54,7 @@ function understandingPrompt(input: UnderstandingInput): string {
   return (
     buildUserPrompt(promptVariables(input)) +
     (input.history
-      ? `\n<history_titles>\n${xmlData(input.history)}\n</history_titles>`
+      ? `\n<history_descriptions>\n${xmlData(input.history)}\n</history_descriptions>`
       : "")
   );
 }
@@ -69,10 +71,10 @@ export interface UnderstandingInput {
 export const understandingSchema: ToolDefinition["output"]["schema"] = {
   type: "object",
   properties: {
-    action_title: { type: "string" },
-    action_detail: { type: "string" },
+    description: { type: "string" },
+    detail: { type: "string" },
   },
-  required: ["action_title", "action_detail"],
+  required: ["description", "detail"],
   additionalProperties: false,
 };
 /** 对键顺序归一化，生成稳定的缓存哈希输入。 */
@@ -149,8 +151,8 @@ export function inputManifest(
     ]),
   );
   const manifest = {
-    schema: "understanding-v4-role-template",
-    prompt_version: 3,
+    schema: "understanding-v5-reading-context",
+    prompt_version: 4,
     prompt,
     userPrompt: understandingPrompt(input),
     model,
@@ -237,6 +239,11 @@ export class UnderstandingService {
     const promptInput = promptVariables(input);
     const userPrompt = understandingPrompt(input);
     const screenshot = input.artifacts.screenshot;
+    const contextEvidence = projectVisualEvidence(
+      promptInput.axTree,
+      promptInput.screenshot,
+      promptInput.focusTitle,
+    ).readingContext;
     const began = Date.now();
     const debug: any = {
       status: "running",
@@ -244,6 +251,7 @@ export class UnderstandingService {
       systemPrompt: prompt,
       userPrompt,
       promptInput,
+      contextEvidence,
       schema: understandingSchema,
       model: config.model,
       protocol: config.protocol ?? "gemini",
@@ -344,24 +352,18 @@ export class UnderstandingService {
         ],
         output: Output.object({
           name: "screen_understanding",
-          schema: jsonSchema<{ action_title: string; action_detail: string }>(
-            understandingSchema,
-            {
-              validate: (value) =>
-                validateJsonSchemaValue(understandingSchema, value).length
-                  ? {
-                      success: false,
-                      error: new Error("invalid_understanding"),
-                    }
-                  : {
-                      success: true,
-                      value: value as {
-                        action_title: string;
-                        action_detail: string;
-                      },
-                    },
-            },
-          ),
+          schema: jsonSchema<UnderstandingResult>(understandingSchema, {
+            validate: (value) =>
+              validateJsonSchemaValue(understandingSchema, value).length
+                ? {
+                    success: false,
+                    error: new Error("invalid_understanding"),
+                  }
+                : {
+                    success: true,
+                    value: value as UnderstandingResult,
+                  },
+          }),
         }),
         // 队列负责显式重试；SDK 不得隐式增加计费请求次数。
         maxRetries: 0,
@@ -378,14 +380,13 @@ export class UnderstandingService {
       const result = response.output;
       if (
         validateJsonSchemaValue(understandingSchema, result).length ||
-        !result.action_title.trim() ||
-        !result.action_detail.trim() ||
-        result.action_title.length > 80 ||
-        result.action_detail.length > 1200
+        !result.description.trim() ||
+        !result.detail.trim()
       )
         throw new Error("invalid_understanding");
       const record = {
         result,
+        contextEvidence,
         app_info: promptInput.app_info,
         model_role: "understanding",
         model_config: {

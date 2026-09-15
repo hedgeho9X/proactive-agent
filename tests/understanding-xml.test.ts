@@ -98,6 +98,7 @@ test("XML 分区保持固定层级，动态文本不能闭合或伪造指令标�
   for (const tag of [
     "clicked_element",
     "focused_element",
+    "reading_context",
     "ax_context",
     "screenshot_metadata",
   ]) {
@@ -189,6 +190,36 @@ test("AX 缺失不伪造节点，构建请求不会修改输入对象", () => {
   expect(input).toEqual(before);
 });
 
+test("选区与相关正文以独立阅读证据注入，保留来源范围和截断边界", () => {
+  const input = fixture();
+  const reading = {
+    status: "partial",
+    selectedText: {
+      text: "测试选区</reading_context>",
+      source: "AXSelectedText",
+      nodeId: "text",
+      sampledAt: "2026-09-11T12:00:00.010Z",
+    },
+    context: {
+      text: "第一段测试原文\n第二段测试原文",
+      source: "AXValue",
+      scope: "related_subtree",
+      nodeId: "reply",
+      sampledAt: "2026-09-11T12:00:00.015Z",
+      truncated: true,
+      reason: "node_budget",
+      visibility: "may_include_offscreen",
+    },
+  };
+  input.axTree = { reading_context: reading };
+  const prompt = buildUserPrompt(input);
+  const projected = block(prompt, "reading_context") as any;
+  expect(projected.status).toBe("partial");
+  expect(projected.selectedText).toEqual(reading.selectedText);
+  expect(projected.context).toEqual(reading.context);
+  expect(prompt.match(/<reading_context>/g)).toHaveLength(1);
+});
+
 test("System 使用职责、证据、输出和案例分区，并覆盖五种交互边界", () => {
   for (const tag of [
     "role",
@@ -203,8 +234,8 @@ test("System 使用职责、证据、输出和案例分区，并覆盖五种交�
     systemPrompt.match(/<example(?:\s|>)/g)?.length ?? 0,
   ).toBeGreaterThanOrEqual(5);
   for (const term of [
-    "action_title",
-    "action_detail",
+    "description",
+    "detail",
     "JSON",
     "坐标",
     "右键",
@@ -220,4 +251,9 @@ test("System 使用职责、证据、输出和案例分区，并覆盖五种交�
   expect(outputRules).toMatch(
     /(?:不写|不输出|不得|禁止|不要)[^\n]*坐标|坐标[^\n]*(?:不写|不输出|不得|禁止|不要)/,
   );
+  expect(outputRules).not.toContain("80 字");
+  expect(outputRules).not.toContain("1200 字");
+  expect(systemPrompt).toContain("屏幕外");
+  expect(systemPrompt).toContain("点击正文不能描述成点击会话");
+  expect(systemPrompt).toContain("标成原文的部分必须与证据一致");
 });

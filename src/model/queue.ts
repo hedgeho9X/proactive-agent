@@ -1,5 +1,6 @@
 /** 按动作到达顺序保留序位；采集和理解并发，投递等待前序动作进入终态。 */
 import { DatabaseSync } from "node:sqlite";
+import { understandingResult } from "./understanding-result.ts";
 export type QueueStatus =
   | "capturing"
   | "queued"
@@ -44,10 +45,17 @@ export class ActionQueue {
     // 只在打开数据库时投影一次旧结果，之后由写入路径逐条更新摘要。
     for (const row of this.db
       .prepare(
-        "SELECT seq,actionId,status,reason,attempts,createdAt,json_extract(result,'$.result.action_title') AS actionTitle,json_extract(result,'$.result.action_detail') AS actionDetail,json_extract(result,'$.debug.imageFile') AS inputImageFile,json_extract(result,'$.debug.elapsedMs') AS elapsedMs,json_extract(result,'$.usage.totalTokens') AS totalTokens,json_extract(result,'$.usage.costUSD') AS costUSD FROM queue ORDER BY seq",
+        "SELECT seq,actionId,status,reason,attempts,createdAt,json_extract(result,'$.result') AS summary,json_extract(result,'$.debug.imageFile') AS inputImageFile,json_extract(result,'$.debug.elapsedMs') AS elapsedMs,json_extract(result,'$.usage.totalTokens') AS totalTokens,json_extract(result,'$.usage.costUSD') AS costUSD FROM queue ORDER BY seq",
       )
-      .all() as any[])
-      this.summaries.set(row.actionId, row);
+      .all() as any[]) {
+      const { summary, ...metadata } = row;
+      const result = understandingResult(summary ? JSON.parse(summary) : null);
+      this.summaries.set(row.actionId, {
+        ...metadata,
+        actionTitle: result.description || null,
+        actionDetail: result.detail || null,
+      });
+    }
   }
   enqueue(actionId: string, reason?: string) {
     this.db
@@ -108,8 +116,9 @@ export class ActionQueue {
       ...row,
       ...(result !== undefined
         ? {
-            actionTitle: result?.result?.action_title ?? null,
-            actionDetail: result?.result?.action_detail ?? null,
+            actionTitle:
+              understandingResult(result?.result).description || null,
+            actionDetail: understandingResult(result?.result).detail || null,
             inputImageFile: result?.debug?.imageFile ?? null,
             elapsedMs: result?.debug?.elapsedMs ?? null,
             totalTokens: result?.usage?.totalTokens ?? null,
